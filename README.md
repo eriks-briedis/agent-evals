@@ -116,3 +116,7 @@ Each session also saves its event log, patch, test output and final message unde
 - The source repo is only read (`git archive`, `git show`). Nothing is committed or pushed there.
 - Hard-linked folders are shared with the cached checkout. An agent that edits files inside `node_modules` changes the cache; delete `<workDir>/prepared/<task>` to rebuild it.
 - Results contain your code and prompts. Keep `results/` out of public repos.
+
+## Example results
+
+[Copilot CLI vs Claude Code on six real Webiny bug fixes](experiments/webiny/README.md): 84 sessions comparing harness, model choice and a large wiki.
