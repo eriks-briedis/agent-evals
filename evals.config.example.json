@@ -1,0 +1,26 @@
+{
+  "repo": "..",
+  "setup": ["npm ci"],
+  "hardlink": ["node_modules"],
+  "beforeTest": [],
+  "env": {},
+  "timeoutMin": 30,
+  "promptSuffix": "Do not commit or push anything.",
+  "variants": {
+    "copilot-auto": { "agent": "copilot", "model": "auto" },
+    "copilot-sonnet": { "agent": "copilot", "model": "claude-sonnet-5.5" },
+    "copilot-auto-no-wiki": {
+      "agent": "copilot",
+      "model": "auto",
+      "remove": ["wiki", "docs", "AGENTS.md", ".github/copilot-instructions.md", ".github/instructions"]
+    },
+    "copilot-auto-short-rules": {
+      "agent": "copilot",
+      "model": "auto",
+      "remove": ["wiki", "docs", "AGENTS.md", ".github/copilot-instructions.md", ".github/instructions"],
+      "overlay": "overlays/short-rules"
+    },
+    "copilot-auto-high-effort": { "agent": "copilot", "model": "auto", "flags": ["--reasoning-effort", "high"] },
+    "claude-sonnet": { "agent": "claude", "model": "claude-sonnet-5-5" }
+  }
+}
