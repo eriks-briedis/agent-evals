@@ -1,0 +1,247 @@
+diff --git a/packages/api-core-sql/__tests__/TableManager.test.ts b/packages/api-core-sql/__tests__/TableManager.test.ts
+new file mode 100644
+index 00000000..cc3d383e
+--- /dev/null
++++ b/packages/api-core-sql/__tests__/TableManager.test.ts
+@@ -0,0 +1,120 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import knexLib from "knex";
++import type { Knex } from "knex";
++import { Container } from "@webiny/feature/api";
++import { ApiCoreStorageOperationsFactory } from "@webiny/api-core";
++import { ApiCoreSqlFeature } from "../src/ApiCoreSqlFeature.js";
++import { TableManager } from "../src/TableManager.js";
++
++describe("SQL core table initialization", () => {
++    let knex: Knex;
++    let queries: string[];
++
++    beforeEach(() => {
++        knex = knexLib({
++            client: "better-sqlite3",
++            connection: { filename: ":memory:" },
++            useNullAsDefault: true
++        });
++        queries = [];
++        knex.on("query", query => queries.push(query.sql));
++    });
++
++    afterEach(async () => {
++        await knex.destroy();
++    });
++
++    it("reuses the registered storage operations across requests", async () => {
++        const container = new Container();
++        ApiCoreSqlFeature.register(container, { knex, tableNamePrefix: "test" });
++        const factory = container.resolve(ApiCoreStorageOperationsFactory);
++        const operations = factory.create();
++
++        await Promise.all(
++            Array.from({ length: 20 }, async () => {
++                const requestOperations = factory.create();
++                expect(requestOperations).toBe(operations);
++                await requestOperations.tenancyStorageOperations.listTenants();
++            })
++        );
++        await factory.create().tenancyStorageOperations.listTenants();
++
++        expect(queries.filter(query => query.includes("sqlite_master"))).toHaveLength(1);
++        expect(queries.filter(query => query.startsWith("create table"))).toHaveLength(1);
++    });
++
++    it("allows two managers to race to create the same table", async () => {
++        const managers = [new TableManager(knex, "test"), new TableManager(knex, "test")];
++        const create = (table: Knex.CreateTableBuilder) => table.text("id");
++
++        await Promise.all(managers.map(manager => manager.ensure("items", create)));
++        expect(await knex.schema.hasTable("test_items")).toBe(true);
++        expect(queries.filter(query => query.startsWith("create table"))).toHaveLength(2);
++    });
++
++    it.each([
++        { code: "42P07", message: 'relation "items" already exists' },
++        {
++            code: "23505",
++            message: "duplicate key value violates unique constraint",
++            constraint: "pg_type_typname_nsp_index"
++        }
++    ])("recognizes PostgreSQL table creation races: $code", async errorInfo => {
++        await knex.schema.createTable("items", table => table.text("id"));
++        const schema = knex.schema;
++        const hasTable = schema.hasTable.bind(schema);
++        vi.spyOn(knex, "schema", "get").mockReturnValue(schema);
++        vi.spyOn(schema, "hasTable")
++            .mockImplementationOnce(() => hasTable("missing"))
++            .mockImplementation(name => hasTable(name));
++        vi.spyOn(schema, "createTable").mockImplementation(() => {
++            throw Object.assign(new Error(errorInfo.message), errorInfo);
++        });
++
++        await expect(
++            new TableManager(knex).ensure("items", table => table.text("id"))
++        ).resolves.toBeUndefined();
++    });
++
++    it("retries after a failed initialization and rechecks after reset", async () => {
++        const manager = new TableManager(knex);
++        const failure = new Error("invalid schema");
++
++        await expect(
++            manager.ensure("items", () => {
++                throw failure;
++            })
++        ).rejects.toBe(failure);
++
++        await manager.ensure("items", table => table.text("id"));
++        await knex.schema.dropTable("items");
++        manager.reset();
++        await manager.ensure("items", table => table.text("id"));
++        expect(await knex.schema.hasTable("items")).toBe(true);
++    });
++
++    it("does not cache an initialization that finishes after reset", async () => {
++        const manager = new TableManager(knex);
++        knex.once("query", () => manager.reset());
++
++        await manager.ensure("items", table => table.text("id"));
++        await manager.ensure("items", table => table.text("id"));
++
++        expect(queries.filter(query => query.includes("sqlite_master"))).toHaveLength(2);
++    });
++
++    it("does not suppress an index creation failure when the table exists", async () => {
++        await knex.schema.createTable("other", table => {
++            table.text("id");
++            table.index("id", "duplicate_index");
++        });
++        const manager = new TableManager(knex);
++
++        await expect(
++            manager.ensure("items", table => {
++                table.text("id");
++                table.index("id", "duplicate_index");
++            })
++        ).rejects.toThrow("index duplicate_index already exists");
++    });
++});
+diff --git a/packages/api-core-sql/src/ApiCoreSqlFeature.ts b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+index a844e8f1..082a81ef 100644
+--- a/packages/api-core-sql/src/ApiCoreSqlFeature.ts
++++ b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+@@ -15,8 +15,9 @@ export interface ApiCoreSqlConfig {
+ export const ApiCoreSqlFeature = createFeature<ApiCoreSqlConfig>({
+     name: "ApiCoreSql",
+     register(container, { knex, tableNamePrefix }) {
++        const storageOperations = createApiCoreSql({ knex, tableNamePrefix });
+         container.registerInstance(ApiCoreStorageOperationsFactory, {
+-            create: () => createApiCoreSql({ knex, tableNamePrefix })
++            create: () => storageOperations
+         });
+     }
+ });
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..3e6e710a 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,6 +10,8 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
++    private generation = 0;
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+@@ -22,6 +24,8 @@ export class TableManager implements ITableManager {
+ 
+     public reset(): void {
+         this.verified.clear();
++        this.pending.clear();
++        this.generation++;
+     }
+ 
+     public resolve(tableName: string): string {
+@@ -38,12 +42,68 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
+-        const exists = await this.knex.schema.hasTable(resolved);
++        const pending = this.pending.get(resolved);
++        if (pending) {
++            return pending;
++        }
++
++        const generation = this.generation;
++        const initialization = this.initialize(resolved, creator).then(() => {
++            if (this.generation === generation) {
++                this.verified.add(resolved);
++            }
++        });
++        this.pending.set(resolved, initialization);
++
++        try {
++            await initialization;
++        } finally {
++            if (this.pending.get(resolved) === initialization) {
++                this.pending.delete(resolved);
++            }
++        }
++    }
++
++    private async initialize(
++        tableName: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        if (await this.knex.schema.hasTable(tableName)) {
++            return;
++        }
++
++        try {
++            await this.knex.schema.createTable(tableName, creator);
++        } catch (error) {
++            if (!this.isTableCreationRace(error, tableName)) {
++                throw error;
++            }
++            if (!(await this.knex.schema.hasTable(tableName))) {
++                throw error;
++            }
++        }
++    }
+ 
+-        if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++    private isTableCreationRace(error: unknown, tableName: string): boolean {
++        if (!(error instanceof Error) || !("code" in error)) {
++            return false;
+         }
+ 
+-        this.verified.add(resolved);
++        if (error.code === "SQLITE_ERROR") {
++            const names = [
++                tableName,
++                `\`${tableName.replaceAll("`", "``")}\``,
++                `"${tableName.replaceAll('"', '""')}"`
++            ];
++            return names.some(name => error.message.includes(`table ${name} already exists`));
++        }
++        if (error.code === "42P07") {
++            return error.message.includes(`relation "${tableName}" already exists`);
++        }
++        return (
++            error.code === "23505" &&
++            "constraint" in error &&
++            error.constraint === "pg_type_typname_nsp_index"
++        );
+     }
+ }
+diff --git a/packages/api-core-sql/vitest.setup.ts b/packages/api-core-sql/vitest.setup.ts
+new file mode 100644
+index 00000000..bb4c9279
+--- /dev/null
++++ b/packages/api-core-sql/vitest.setup.ts
+@@ -0,0 +1,5 @@
++import { createTestConfig } from "../../testing";
++
++export default async () => {
++    return createTestConfig({ path: import.meta.dirname });
++};

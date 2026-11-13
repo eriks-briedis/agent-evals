@@ -1,0 +1,37 @@
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..053e0c87 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -109,7 +109,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs: AuditLogsContextValue = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +134,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs: AuditLogsContextValue = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

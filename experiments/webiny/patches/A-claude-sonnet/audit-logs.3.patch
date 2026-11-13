@@ -1,0 +1,13 @@
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;

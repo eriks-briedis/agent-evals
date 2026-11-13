@@ -1,0 +1,137 @@
+diff --git a/packages/api-opensearch/__tests__/registriesContainerScope.test.ts b/packages/api-opensearch/__tests__/registriesContainerScope.test.ts
+new file mode 100644
+index 00000000..8934a888
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registriesContainerScope.test.ts
+@@ -0,0 +1,107 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++import { OpenSearchIndexFeature } from "~/features/OpenSearchIndex/feature.js";
++import { OpenSearchIndexRegistry } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.js";
++import { OpenSearchIndex } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndex.js";
++
++class CustomOperatorImpl implements OpenSearchQueryBuilderOperator.Interface {
++    public getOperator(): string {
++        return "customOp";
++    }
++
++    public apply(): void {
++        // noop
++    }
++}
++
++const CustomOperator = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: CustomOperatorImpl,
++    dependencies: []
++});
++
++class BuiltInIndexImpl implements OpenSearchIndex.Interface {
++    public readonly body = { settings: { builtIn: true } } as any;
++    public canUse(): boolean {
++        return true;
++    }
++}
++
++const BuiltInIndex = OpenSearchIndex.createImplementation({
++    implementation: BuiltInIndexImpl,
++    dependencies: []
++});
++
++class CustomIndexImpl implements OpenSearchIndex.Interface {
++    public readonly body = { settings: { custom: true } } as any;
++    public canUse(): boolean {
++        return true;
++    }
++}
++
++const CustomIndex = OpenSearchIndex.createImplementation({
++    implementation: CustomIndexImpl,
++    dependencies: []
++});
++
++describe("OpenSearch registries in child containers", () => {
++    it("should include operators registered in the request container only in that request", () => {
++        const root = new Container();
++        OpenSearchQueryBuilderOperatorFeature.register(root);
++
++        // Resolve in root first, to make sure nothing is cached and shared with children.
++        const rootRegistry = root.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        expect(rootRegistry.get("customOp")).toBeUndefined();
++        expect(rootRegistry.get("eq")).toBeDefined();
++
++        const requestA = root.createChildContainer();
++        requestA.register(CustomOperator);
++        const requestB = root.createChildContainer();
++
++        const registryA = requestA.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        const registryB = requestB.resolve(OpenSearchQueryBuilderOperatorRegistry);
++
++        expect(registryA.get("customOp")).toBeInstanceOf(CustomOperatorImpl);
++        expect(registryB.get("customOp")).toBeUndefined();
++        expect(root.resolve(OpenSearchQueryBuilderOperatorRegistry).get("customOp")).toBeUndefined();
++
++        const builtIn = rootRegistry.getAll().map(op => op.getOperator());
++        for (const registry of [registryA, registryB]) {
++            for (const name of builtIn) {
++                expect(registry.get(name)).toBeDefined();
++            }
++        }
++        expect(registryA.getAll()).toHaveLength(builtIn.length + 1);
++        expect(registryB.getAll()).toHaveLength(builtIn.length);
++    });
++
++    it("should include indexes registered in the request container only in that request", () => {
++        const root = new Container();
++        OpenSearchIndexFeature.register(root);
++        root.register(BuiltInIndex);
++
++        const rootRegistry = root.resolve(OpenSearchIndexRegistry);
++        expect(rootRegistry.getAll()).toHaveLength(1);
++
++        const requestA = root.createChildContainer();
++        requestA.register(CustomIndex);
++        const requestB = root.createChildContainer();
++
++        const registryA = requestA.resolve(OpenSearchIndexRegistry);
++        const registryB = requestB.resolve(OpenSearchIndexRegistry);
++
++        expect(registryA.getAll()).toHaveLength(2);
++        expect(registryA.getAll()[0]).toBeInstanceOf(BuiltInIndexImpl);
++        expect(registryA.getLastAdded()).toBeInstanceOf(CustomIndexImpl);
++
++        expect(registryB.getAll()).toHaveLength(1);
++        expect(registryB.getLastAdded()).toBeInstanceOf(BuiltInIndexImpl);
++
++        expect(root.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(1);
++        expect(root.resolve(OpenSearchIndexRegistry).getLastAdded()).toBeInstanceOf(
++            BuiltInIndexImpl
++        );
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..0cb69234 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -34,6 +34,6 @@ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+         container.register(NotIn).inSingletonScope();
+         container.register(StartsWith).inSingletonScope();
+         container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });

@@ -1,0 +1,111 @@
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+index e390e8e6..a66f6973 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+@@ -1,3 +1,4 @@
++import { AsyncLocalStorage } from "node:async_hooks";
+ import { createImplementation } from "@webiny/feature/api";
+ import { HandlerExecution } from "@webiny/event-handler-core";
+ import { TenantContext as Abstraction } from "./abstractions.js";
+@@ -5,8 +6,15 @@ import type { Tenant } from "~/types/tenancy.js";
+ import { GetRootTenantUseCase } from "~/features/tenancy/GetRootTenant/index.js";
+ import { TenantIsDisabledError } from "./errors.js";
+ 
++function assertCanSet(tenant: Tenant): void {
++    if (tenant.isInstalled && tenant.status === "disabled") {
++        throw new TenantIsDisabledError();
++    }
++}
++
+ class TenantContextImpl implements Abstraction.Interface {
+     private currentTenant: Tenant | null = null;
++    private scope = new AsyncLocalStorage<{ tenant: Tenant }>();
+ 
+     constructor(
+         private getRootTenant: GetRootTenantUseCase.Interface,
+@@ -15,57 +23,42 @@ class TenantContextImpl implements Abstraction.Interface {
+ 
+     getTenant(): Tenant {
+         this.handlerExecution?.assertCurrent("TenantContext");
+-        return this.currentTenant!;
++        return this.scope.getStore()?.tenant ?? this.currentTenant!;
+     }
+ 
+     setTenant(tenant: Tenant): void {
+         this.handlerExecution?.assertCurrent("TenantContext");
+-        if (tenant.isInstalled && tenant.status === "disabled") {
+-            throw new TenantIsDisabledError();
++        if (this.scope.getStore()) {
++            throw new Error(
++                "Cannot call setTenant() inside a withTenant/withRootTenant/withEachTenant callback."
++            );
+         }
++        assertCanSet(tenant);
+         this.currentTenant = tenant;
+     }
+ 
+-    /*
+-     * Puts back the tenant that was current before a `with*` call. That can be none at all: work
+-     * outside an HTTP request (a background task, a scheduled action) starts without a tenant.
+-     * Restoring is not switching, so it skips the checks `setTenant` makes.
+-     */
+-    private restoreTenant(tenant: Tenant | null): void {
+-        this.currentTenant = tenant;
++    // The switched tenant lives in an async scope, so it is visible only to code running inside the callback.
++    private runWithTenant<T>(tenant: Tenant, cb: () => Promise<T>): Promise<T> {
++        assertCanSet(tenant);
++        return this.scope.run({ tenant }, cb);
+     }
+ 
+     async withRootTenant<T>(cb: () => T): Promise<T> {
+-        const initialTenant = this.currentTenant;
+         const rootTenant = await this.getRootTenant.execute();
+         if (!rootTenant.isOk()) {
+             return rootTenant.error as T;
+         }
+ 
+-        const tenant = rootTenant.value;
+-
+-        this.setTenant(tenant);
+-        try {
+-            return await cb();
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
++        return this.runWithTenant(rootTenant.value, async () => cb());
+     }
+ 
+     async withEachTenant<TReturn>(
+         tenants: Tenant[],
+         cb: (tenant: Tenant) => Promise<TReturn>
+     ): Promise<TReturn[]> {
+-        const initialTenant = this.currentTenant;
+         const results = [];
+         for (const tenant of tenants) {
+-            this.setTenant(tenant);
+-            try {
+-                results.push(await cb(tenant));
+-            } finally {
+-                this.restoreTenant(initialTenant);
+-            }
++            results.push(await this.runWithTenant(tenant, () => cb(tenant)));
+         }
+         return results;
+     }
+@@ -74,14 +67,7 @@ class TenantContextImpl implements Abstraction.Interface {
+         tenant: Tenant,
+         cb: (tenant: Tenant) => Promise<TReturn>
+     ): Promise<TReturn> {
+-        const initialTenant = this.currentTenant;
+-        this.setTenant(tenant);
+-        try {
+-            return await cb(tenant);
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
++        return this.runWithTenant(tenant, () => cb(tenant));
+     }
+ }
+ 

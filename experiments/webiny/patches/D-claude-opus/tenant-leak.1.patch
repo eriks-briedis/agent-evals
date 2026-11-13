@@ -1,0 +1,294 @@
+diff --git a/packages/api-core/__tests__/tenancy/tenantContext.test.ts b/packages/api-core/__tests__/tenancy/tenantContext.test.ts
+index 6891fe89..52d0aa75 100644
+--- a/packages/api-core/__tests__/tenancy/tenantContext.test.ts
++++ b/packages/api-core/__tests__/tenancy/tenantContext.test.ts
+@@ -125,3 +125,135 @@ describe("TenantContext with no tenant set", () => {
+         expect(tenantContext.getTenant()).toBeNull();
+     });
+ });
++
++/*
++ * One field of a GraphQL query may temporarily switch tenant (e.g. to load inherited data from the
++ * parent tenant) while sibling fields of the same query are still resolving. The switch must only
++ * be visible inside its own callback.
++ */
++describe("TenantContext temporary switches are scoped to their callback", () => {
++    let tenantContext: TenantContext.Interface;
++
++    const tick = () => new Promise(resolve => setTimeout(resolve, 5));
++
++    beforeEach(() => {
++        const container = new Container();
++        TenancyFeature.register(container, new MockTenancyStorageOperations());
++        tenantContext = container.resolve(TenantContext);
++        tenantContext.setTenant(createTenant("request", "root"));
++    });
++
++    it("a concurrent sibling keeps seeing the request's tenant during withTenant", async () => {
++        const seenBySibling: string[] = [];
++        const switched = tenantContext.withTenant(createTenant("parent", "root"), async () => {
++            await tick();
++            await tick();
++            return tenantContext.getTenant().id;
++        });
++        const sibling = (async () => {
++            seenBySibling.push(tenantContext.getTenant().id);
++            await tick();
++            seenBySibling.push(tenantContext.getTenant().id);
++            await tick();
++            seenBySibling.push(tenantContext.getTenant().id);
++        })();
++
++        const [inside] = await Promise.all([switched, sibling]);
++        expect(inside).toBe("parent");
++        expect(seenBySibling).toEqual(["request", "request", "request"]);
++        expect(tenantContext.getTenant().id).toBe("request");
++    });
++
++    it("a concurrent sibling keeps seeing the request's tenant during withRootTenant", async () => {
++        let seenBySibling: string | undefined;
++        const switched = tenantContext.withRootTenant(async () => {
++            await tick();
++            return tenantContext.getTenant().id;
++        });
++        const sibling = (async () => {
++            await tick();
++            seenBySibling = tenantContext.getTenant().id;
++        })();
++
++        const [inside] = await Promise.all([switched, sibling]);
++        expect(inside).toBe("root");
++        expect(seenBySibling).toBe("request");
++    });
++
++    it("a concurrent sibling keeps seeing the request's tenant during withEachTenant", async () => {
++        const seenBySibling: string[] = [];
++        const switched = tenantContext.withEachTenant(
++            [createTenant("a", "root"), createTenant("b", "root")],
++            async () => {
++                await tick();
++                return tenantContext.getTenant().id;
++            }
++        );
++        const sibling = (async () => {
++            for (let i = 0; i < 4; i++) {
++                await tick();
++                seenBySibling.push(tenantContext.getTenant().id);
++            }
++        })();
++
++        const [inside] = await Promise.all([switched, sibling]);
++        expect(inside).toEqual(["a", "b"]);
++        expect(seenBySibling).toEqual(["request", "request", "request", "request"]);
++    });
++
++    it("overlapping switches do not see each other", async () => {
++        const [a, b] = await Promise.all([
++            tenantContext.withTenant(createTenant("a", "root"), async () => {
++                await tick();
++                return tenantContext.getTenant().id;
++            }),
++            tenantContext.withTenant(createTenant("b", "root"), async () => {
++                await tick();
++                return tenantContext.getTenant().id;
++            })
++        ]);
++        expect([a, b]).toEqual(["a", "b"]);
++        expect(tenantContext.getTenant().id).toBe("request");
++    });
++
++    it("nested switches see the innermost tenant and restore the outer one", async () => {
++        const seen = await tenantContext.withTenant(createTenant("outer", "root"), async () => {
++            const inner = await tenantContext.withTenant(createTenant("inner", "root"), async () =>
++                tenantContext.getTenant().id
++            );
++            return [inner, tenantContext.getTenant().id];
++        });
++        expect(seen).toEqual(["inner", "outer"]);
++    });
++
++    it("rejects setTenant inside a callback and leaves the request's tenant unchanged", async () => {
++        for (const run of [
++            (cb: () => Promise<void>) => tenantContext.withTenant(createTenant("sub", "root"), cb),
++            (cb: () => Promise<void>) => tenantContext.withRootTenant(cb),
++            (cb: () => Promise<void>) =>
++                tenantContext.withEachTenant([createTenant("sub", "root")], cb)
++        ]) {
++            let tenantAfterRejectedSet: string | undefined;
++            await expect(
++                run(async () => {
++                    const before = tenantContext.getTenant().id;
++                    try {
++                        tenantContext.setTenant(createTenant("hijack", "root"));
++                    } finally {
++                        tenantAfterRejectedSet = tenantContext.getTenant().id;
++                        expect(tenantAfterRejectedSet).toBe(before);
++                    }
++                })
++            ).rejects.toMatchObject({ code: "Tenancy/TenantSwitchInScope" });
++            expect(tenantContext.getTenant().id).toBe("request");
++        }
++    });
++
++    it("rejects switching to a disabled tenant", async () => {
++        const disabled = { ...createTenant("off", "root"), status: "disabled" as const };
++        await expect(tenantContext.withTenant(disabled, async () => "x")).rejects.toMatchObject({
++            code: "Tenancy/TenantDisabled"
++        });
++        expect(tenantContext.getTenant().id).toBe("request");
++    });
++});
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+index e390e8e6..3d57d385 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+@@ -1,13 +1,31 @@
++import { AsyncLocalStorage } from "node:async_hooks";
+ import { createImplementation } from "@webiny/feature/api";
+ import { HandlerExecution } from "@webiny/event-handler-core";
+ import { TenantContext as Abstraction } from "./abstractions.js";
+ import type { Tenant } from "~/types/tenancy.js";
+ import { GetRootTenantUseCase } from "~/features/tenancy/GetRootTenant/index.js";
+-import { TenantIsDisabledError } from "./errors.js";
++import { TenantIsDisabledError, TenantSwitchInScopeError } from "./errors.js";
++
++interface TenantScope {
++    tenant: Tenant;
++}
+ 
+ class TenantContextImpl implements Abstraction.Interface {
++    /*
++     * The request's own tenant, set through `setTenant`.
++     */
+     private currentTenant: Tenant | null = null;
+ 
++    /*
++     * Temporary switches made through `withTenant`, `withRootTenant` and `withEachTenant`. They
++     * live in async-local storage, so a switch is seen only by code running inside its callback
++     * (including everything that callback awaits), never by sibling work of the same request
++     * that happens to run concurrently, e.g. other fields of the same GraphQL query.
++     *
++     * The storage is per instance so that separate containers never see each other's scopes.
++     */
++    private readonly scopeStorage = new AsyncLocalStorage<TenantScope>();
++
+     constructor(
+         private getRootTenant: GetRootTenantUseCase.Interface,
+         private handlerExecution: HandlerExecution.Interface | undefined
+@@ -15,57 +33,42 @@ class TenantContextImpl implements Abstraction.Interface {
+ 
+     getTenant(): Tenant {
+         this.handlerExecution?.assertCurrent("TenantContext");
++        const scope = this.scopeStorage.getStore();
++        if (scope) {
++            return scope.tenant;
++        }
+         return this.currentTenant!;
+     }
+ 
+     setTenant(tenant: Tenant): void {
+         this.handlerExecution?.assertCurrent("TenantContext");
+-        if (tenant.isInstalled && tenant.status === "disabled") {
+-            throw new TenantIsDisabledError();
++        if (this.scopeStorage.getStore()) {
++            /*
++             * Inside a `with*` callback the tenant is fixed. Changing the request's tenant from
++             * here would either be invisible to the callback or leak out of it, so reject it.
++             */
++            throw new TenantSwitchInScopeError();
+         }
+-        this.currentTenant = tenant;
+-    }
+-
+-    /*
+-     * Puts back the tenant that was current before a `with*` call. That can be none at all: work
+-     * outside an HTTP request (a background task, a scheduled action) starts without a tenant.
+-     * Restoring is not switching, so it skips the checks `setTenant` makes.
+-     */
+-    private restoreTenant(tenant: Tenant | null): void {
++        this.assertCanSwitchTo(tenant);
+         this.currentTenant = tenant;
+     }
+ 
+     async withRootTenant<T>(cb: () => T): Promise<T> {
+-        const initialTenant = this.currentTenant;
+         const rootTenant = await this.getRootTenant.execute();
+         if (!rootTenant.isOk()) {
+             return rootTenant.error as T;
+         }
+ 
+-        const tenant = rootTenant.value;
+-
+-        this.setTenant(tenant);
+-        try {
+-            return await cb();
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
++        return this.runInTenant(rootTenant.value, () => cb());
+     }
+ 
+     async withEachTenant<TReturn>(
+         tenants: Tenant[],
+         cb: (tenant: Tenant) => Promise<TReturn>
+     ): Promise<TReturn[]> {
+-        const initialTenant = this.currentTenant;
+-        const results = [];
++        const results: TReturn[] = [];
+         for (const tenant of tenants) {
+-            this.setTenant(tenant);
+-            try {
+-                results.push(await cb(tenant));
+-            } finally {
+-                this.restoreTenant(initialTenant);
+-            }
++            results.push(await this.runInTenant(tenant, () => cb(tenant)));
+         }
+         return results;
+     }
+@@ -74,13 +77,18 @@ class TenantContextImpl implements Abstraction.Interface {
+         tenant: Tenant,
+         cb: (tenant: Tenant) => Promise<TReturn>
+     ): Promise<TReturn> {
+-        const initialTenant = this.currentTenant;
+-        this.setTenant(tenant);
+-        try {
+-            return await cb(tenant);
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
++        return this.runInTenant(tenant, () => cb(tenant));
++    }
++
++    private async runInTenant<T>(tenant: Tenant, cb: () => T | Promise<T>): Promise<T> {
++        this.handlerExecution?.assertCurrent("TenantContext");
++        this.assertCanSwitchTo(tenant);
++        return this.scopeStorage.run({ tenant }, () => Promise.resolve(cb()));
++    }
++
++    private assertCanSwitchTo(tenant: Tenant): void {
++        if (tenant.isInstalled && tenant.status === "disabled") {
++            throw new TenantIsDisabledError();
+         }
+     }
+ }
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/errors.ts b/packages/api-core/src/features/tenancy/TenantContext/errors.ts
+index 238f2ff8..21b8ad45 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/errors.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/errors.ts
+@@ -7,3 +7,14 @@ export class TenantIsDisabledError extends BaseError {
+         super({ message: "Tenant is disabled!" });
+     }
+ }
++
++export class TenantSwitchInScopeError extends BaseError {
++    override readonly code = "Tenancy/TenantSwitchInScope" as const;
++
++    constructor() {
++        super({
++            message:
++                "Cannot call setTenant() inside withTenant(), withRootTenant() or withEachTenant(): the tenant is fixed for the duration of the callback. Use a nested withTenant() instead."
++        });
++    }
++}

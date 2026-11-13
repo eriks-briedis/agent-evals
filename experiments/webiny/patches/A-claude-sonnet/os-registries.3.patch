@@ -1,0 +1,88 @@
+diff --git a/packages/api-opensearch/__tests__/registryScope.test.ts b/packages/api-opensearch/__tests__/registryScope.test.ts
+new file mode 100644
+index 00000000..f7a8fb2c
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registryScope.test.ts
+@@ -0,0 +1,58 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++import { OpenSearchIndexFeature } from "~/features/OpenSearchIndex/feature.js";
++import { OpenSearchIndex } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndex.js";
++import { OpenSearchIndexRegistry } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.js";
++
++class CustomOperator implements OpenSearchQueryBuilderOperator.Interface {
++    getOperator() {
++        return "custom";
++    }
++    apply() {}
++}
++const CustomOperatorImpl = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: CustomOperator,
++    dependencies: []
++});
++
++class CustomIndex implements OpenSearchIndex.Interface {
++    body = {} as any;
++    canUse() {
++        return true;
++    }
++}
++const CustomIndexImpl = OpenSearchIndex.createImplementation({
++    implementation: CustomIndex,
++    dependencies: []
++});
++
++describe("registries are scoped per container", () => {
++    const root = new Container();
++    OpenSearchQueryBuilderOperatorFeature.register(root);
++    OpenSearchIndexFeature.register(root);
++
++    it("operators", () => {
++        const a = root.createChildContainer();
++        a.register(CustomOperatorImpl).inSingletonScope();
++        const b = root.createChildContainer();
++
++        const ra = a.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        expect(ra.get("custom")).toBeDefined();
++        expect(ra.get("eq")).toBeDefined();
++        expect(b.resolve(OpenSearchQueryBuilderOperatorRegistry).get("custom")).toBeUndefined();
++        expect(b.resolve(OpenSearchQueryBuilderOperatorRegistry).get("eq")).toBeDefined();
++        expect(root.resolve(OpenSearchQueryBuilderOperatorRegistry).get("custom")).toBeUndefined();
++    });
++
++    it("indexes", () => {
++        const a = root.createChildContainer();
++        a.register(CustomIndexImpl).inSingletonScope();
++        const b = root.createChildContainer();
++        expect(a.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(1);
++        expect(b.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(0);
++        expect(root.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(0);
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..0cb69234 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -34,6 +34,6 @@ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+         container.register(NotIn).inSingletonScope();
+         container.register(StartsWith).inSingletonScope();
+         container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });

@@ -1,0 +1,82 @@
+diff --git a/packages/api-opensearch/__tests__/registryScope.test.ts b/packages/api-opensearch/__tests__/registryScope.test.ts
+new file mode 100644
+index 00000000..a54b96e8
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registryScope.test.ts
+@@ -0,0 +1,30 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++
++describe("registry scope", () => {
++    it("sees per-request operators only in that request", () => {
++        const root = new Container();
++        OpenSearchQueryBuilderOperatorFeature.register(root);
++        const a = root.createChildContainer();
++        const b = root.createChildContainer();
++        class Custom {
++            getOperator() {
++                return "custom";
++            }
++            apply() {}
++        }
++        const Impl = OpenSearchQueryBuilderOperator.createImplementation({
++            implementation: Custom as any,
++            dependencies: []
++        });
++        a.register(Impl).inSingletonScope();
++        const get = (c: Container) => c.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        expect(get(a).get("custom")).toBeDefined();
++        expect(get(b).get("custom")).toBeUndefined();
++        expect(get(root).get("custom")).toBeUndefined();
++        expect(get(b).get("eq")).toBeDefined();
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..0cb69234 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -34,6 +34,6 @@ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+         container.register(NotIn).inSingletonScope();
+         container.register(StartsWith).inSingletonScope();
+         container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });
+diff --git a/wiki/ai-context/core-features-reference.md b/wiki/ai-context/core-features-reference.md
+index b768c476..5fece593 100644
+--- a/wiki/ai-context/core-features-reference.md
++++ b/wiki/ai-context/core-features-reference.md
+@@ -625,7 +625,7 @@ Injectable factories that transform raw input into domain `CmsEntry` objects. Li
+ 
+ - **Import:** `import { OpenSearchQueryBuilderOperatorRegistry } from "@webiny/api-opensearch/exports/api/opensearch.js"`
+ - **Interface Type:** See `packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.ts`
+-- **Usage:** Registry that collects all `OpenSearchQueryBuilderOperator` implementations via `{ multiple: true }` DI. Provides `get(operatorName)` and `getAll()`. Registered as singleton by `OpenSearchQueryBuilderOperatorFeature`.
++- **Usage:** Registry that collects all `OpenSearchQueryBuilderOperator` implementations via `{ multiple: true }` DI. Provides `get(operatorName)` and `getAll()`. Registered container-scoped (each request container builds its own, so per-request operators show up only there) by `OpenSearchQueryBuilderOperatorFeature`.
+ 
+ ### OpenSearchField
+ 
+@@ -654,7 +654,7 @@ Injectable factories that transform raw input into domain `CmsEntry` objects. Li
+ 
+ - **Import:** `import { OpenSearchIndexRegistry } from "@webiny/api-opensearch/exports/api/opensearch.js"`
+ - **Interface Type:** See `packages/api-opensearch/src/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.ts`
+-- **Usage:** Registry that collects all `OpenSearchIndex` implementations via `{ multiple: true }` DI. Provides `getLastAdded()` (returns the last registered usable index) and `getAll()`. Registered as singleton by `OpenSearchIndexFeature`.
++- **Usage:** Registry that collects all `OpenSearchIndex` implementations via `{ multiple: true }` DI. Provides `getLastAdded()` (returns the last registered usable index) and `getAll()`. Registered container-scoped (each request container builds its own, so per-request indexes show up only there) by `OpenSearchIndexFeature`.
+ 
+ ### AwsOpenSearchClientFactoryFeature
+ 

@@ -1,0 +1,77 @@
+diff --git a/packages/api-core-sql/src/ApiCoreSqlFeature.ts b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+index a844e8f1..01ac4af9 100644
+--- a/packages/api-core-sql/src/ApiCoreSqlFeature.ts
++++ b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+@@ -15,8 +15,10 @@ export interface ApiCoreSqlConfig {
+ export const ApiCoreSqlFeature = createFeature<ApiCoreSqlConfig>({
+     name: "ApiCoreSql",
+     register(container, { knex, tableNamePrefix }) {
++        let operations: ReturnType<typeof createApiCoreSql> | undefined;
++
+         container.registerInstance(ApiCoreStorageOperationsFactory, {
+-            create: () => createApiCoreSql({ knex, tableNamePrefix })
++            create: () => (operations ??= createApiCoreSql({ knex, tableNamePrefix }))
+         });
+     }
+ });
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..ff0fcd8e 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,14 +10,11 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+         this.prefix = prefix ? `${prefix}_` : "";
+-
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+-        managers.push(this);
+     }
+ 
+     public reset(): void {
+@@ -38,12 +35,36 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
+-        const exists = await this.knex.schema.hasTable(resolved);
++        let pending = this.pending.get(resolved);
++        if (!pending) {
++            pending = this.createIfMissing(resolved, creator)
++                .then(() => {
++                    this.verified.add(resolved);
++                })
++                .finally(() => {
++                    this.pending.delete(resolved);
++                });
++            this.pending.set(resolved, pending);
++        }
+ 
+-        if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++        return pending;
++    }
++
++    private async createIfMissing(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        if (await this.knex.schema.hasTable(resolved)) {
++            return;
+         }
+ 
+-        this.verified.add(resolved);
++        try {
++            await this.knex.schema.createTable(resolved, creator);
++        } catch (error) {
++            // Another manager/process may have created the table in the meantime.
++            if (!(await this.knex.schema.hasTable(resolved))) {
++                throw error;
++            }
++        }
+     }
+ }

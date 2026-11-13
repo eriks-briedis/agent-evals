@@ -1,0 +1,130 @@
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..2380bf34 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,6 +10,7 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+@@ -22,6 +23,7 @@ export class TableManager implements ITableManager {
+ 
+     public reset(): void {
+         this.verified.clear();
++        this.pending.clear();
+     }
+ 
+     public resolve(tableName: string): string {
+@@ -38,12 +40,40 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
+-        const exists = await this.knex.schema.hasTable(resolved);
++        const inflight = this.pending.get(resolved);
++        if (inflight) {
++            return inflight;
++        }
+ 
+-        if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++        const promise = this.create(resolved, creator)
++            .then(() => {
++                this.verified.add(resolved);
++            })
++            .finally(() => {
++                if (this.pending.get(resolved) === promise) {
++                    this.pending.delete(resolved);
++                }
++            });
++        this.pending.set(resolved, promise);
++        return promise;
++    }
++
++    private async create(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        if (await this.knex.schema.hasTable(resolved)) {
++            return;
+         }
+ 
+-        this.verified.add(resolved);
++        try {
++            await this.knex.schema.createTable(resolved, creator);
++        } catch (error) {
++            // Another manager/process may have created the table in the meantime.
++            if (await this.knex.schema.hasTable(resolved)) {
++                return;
++            }
++            throw error;
++        }
+     }
+ }
+diff --git a/packages/api-core-sql/src/createApiCoreSql.ts b/packages/api-core-sql/src/createApiCoreSql.ts
+index 982c0221..ff70a2b4 100644
+--- a/packages/api-core-sql/src/createApiCoreSql.ts
++++ b/packages/api-core-sql/src/createApiCoreSql.ts
+@@ -13,30 +13,40 @@ interface CreateApiCoreSqlParams {
+     tableNamePrefix?: string;
+ }
+ 
++interface Cached {
++    loader: SqlServiceManifestLoader;
++    operations: ApiCoreStorageOperations;
++}
++
++// One shared instance per knex + prefix, so repeated calls do not create new TableManagers.
++const cache = new WeakMap<Knex, Map<string, Cached>>();
++
+ export const createApiCoreSql = ({
+     knex,
+     tableNamePrefix
+ }: CreateApiCoreSqlParams): ApiCoreStorageOperations => {
+-    const tableManager = new TableManager(knex, tableNamePrefix);
++    const key = tableNamePrefix ?? "";
++    let byPrefix = cache.get(knex);
++    if (!byPrefix) {
++        byPrefix = new Map();
++        cache.set(knex, byPrefix);
++    }
++    let cached = byPrefix.get(key);
++    if (!cached) {
++        const tableManager = new TableManager(knex, tableNamePrefix);
++        cached = {
++            loader: new SqlServiceManifestLoader(knex, tableManager),
++            operations: {
++                usersStorageOperations: createUsersStorageOperations({ knex, tableManager }),
++                tenancyStorageOperations: createTenancyStorageOperations({ knex, tableManager }),
++                securityStorageOperations: createSecurityStorageOperations({ knex, tableManager }),
++                keyValueStorageOperations: createKeyValueStorageOperations({ knex, tableManager })
++            }
++        };
++        byPrefix.set(key, cached);
++    }
+ 
+-    ServiceDiscovery.setLoader(new SqlServiceManifestLoader(knex, tableManager));
++    ServiceDiscovery.setLoader(cached.loader);
+ 
+-    return {
+-        usersStorageOperations: createUsersStorageOperations({
+-            knex,
+-            tableManager
+-        }),
+-        tenancyStorageOperations: createTenancyStorageOperations({
+-            knex,
+-            tableManager
+-        }),
+-        securityStorageOperations: createSecurityStorageOperations({
+-            knex,
+-            tableManager
+-        }),
+-        keyValueStorageOperations: createKeyValueStorageOperations({
+-            knex,
+-            tableManager
+-        })
+-    };
++    return cached.operations;
+ };

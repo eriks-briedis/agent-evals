@@ -1,0 +1,274 @@
+diff --git a/packages/api-core-sql/__tests__/storageOperationsCache.test.ts b/packages/api-core-sql/__tests__/storageOperationsCache.test.ts
+new file mode 100644
+index 00000000..6c7875a5
+--- /dev/null
++++ b/packages/api-core-sql/__tests__/storageOperationsCache.test.ts
+@@ -0,0 +1,74 @@
++import { describe, expect, it } from "vitest";
++import knexLib, { type Knex } from "knex";
++import { Container } from "@webiny/feature/api";
++import { ApiCoreStorageOperationsFactory } from "@webiny/api-core";
++import { ApiCoreSqlFeature } from "~/ApiCoreSqlFeature.js";
++import { TableManager } from "~/TableManager.js";
++
++const createKnex = (): Knex => {
++    return knexLib({
++        client: "better-sqlite3",
++        connection: { filename: ":memory:" },
++        useNullAsDefault: true
++    });
++};
++
++const managerCount = () => {
++    return ((globalThis as Record<string, unknown>).__sqlTableManagers as unknown[] | undefined)
++        ?.length ?? 0;
++};
++
++const creator = (table: Knex.CreateTableBuilder) => {
++    table.text("id").primary().notNullable();
++};
++
++describe("SQL core storage operations caching", () => {
++    it("factory returns the same storage operations without creating new TableManagers", async () => {
++        const knex = createKnex();
++        try {
++            const container = new Container();
++            ApiCoreSqlFeature.register(container, { knex, tableNamePrefix: "cache_test" });
++            const factory = container.resolve(ApiCoreStorageOperationsFactory);
++
++            const first = factory.create();
++            const before = managerCount();
++
++            for (let i = 0; i < 100; i++) {
++                expect(factory.create()).toBe(first);
++            }
++            expect(managerCount()).toBe(before);
++        } finally {
++            await knex.destroy();
++        }
++    });
++
++    it("concurrent first use of the same table via one manager succeeds", async () => {
++        const knex = createKnex();
++        try {
++            const manager = new TableManager(knex, "concurrent_one");
++            await Promise.all(
++                Array.from({ length: 20 }, () => manager.ensure("things", creator))
++            );
++            expect(await knex.schema.hasTable(manager.resolve("things"))).toBe(true);
++        } finally {
++            await knex.destroy();
++        }
++    });
++
++    it("two managers racing to create the same table both succeed", async () => {
++        const knex = createKnex();
++        try {
++            const a = new TableManager(knex, "concurrent_two");
++            const b = new TableManager(knex, "concurrent_two");
++            await Promise.all([
++                a.ensure("things", creator),
++                b.ensure("things", creator),
++                a.ensure("things", creator),
++                b.ensure("things", creator)
++            ]);
++            expect(await knex.schema.hasTable(a.resolve("things"))).toBe(true);
++        } finally {
++            await knex.destroy();
++        }
++    });
++});
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..d0b78679 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -6,22 +6,38 @@ interface ITableManager {
+     ensure(tableName: string, creator: (table: Knex.CreateTableBuilder) => void): Promise<void>;
+ }
+ 
++/**
++ * Lazily creates tables and remembers which ones are known to exist.
++ *
++ * Instances are meant to be long-lived (one per Knex client + table prefix, see `createApiCoreSql`)
++ * so the existence check runs once per table per process, not once per request.
++ */
+ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
++    /**
++     * Bumped on reset() so an ensure() that was in flight during a reset does not mark its table
++     * as verified afterwards (the table may have been dropped in the meantime).
++     */
++    private generation = 0;
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+         this.prefix = prefix ? `${prefix}_` : "";
+ 
++        // Test hook: test setups drop all tables between tests and call reset() on every registered
++        // manager. Managers are cached per Knex client + prefix, so this list does not grow per request.
+         const g = globalThis as Record<string, unknown>;
+         const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+         managers.push(this);
+     }
+ 
+     public reset(): void {
++        this.generation++;
+         this.verified.clear();
++        this.pending.clear();
+     }
+ 
+     public resolve(tableName: string): string {
+@@ -38,12 +54,46 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
+-        const exists = await this.knex.schema.hasTable(resolved);
++        // Share a single in-flight check/create between concurrent callers of this manager.
++        const inFlight = this.pending.get(resolved);
++        if (inFlight) {
++            return inFlight;
++        }
+ 
+-        if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++        const generation = this.generation;
++        const promise = this.createIfMissing(resolved, creator)
++            .then(() => {
++                if (this.generation === generation) {
++                    this.verified.add(resolved);
++                }
++            })
++            .finally(() => {
++                if (this.pending.get(resolved) === promise) {
++                    this.pending.delete(resolved);
++                }
++            });
++
++        this.pending.set(resolved, promise);
++        return promise;
++    }
++
++    private async createIfMissing(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        if (await this.knex.schema.hasTable(resolved)) {
++            return;
+         }
+ 
+-        this.verified.add(resolved);
++        try {
++            await this.knex.schema.createTable(resolved, creator);
++        } catch (ex) {
++            // Another manager / process may have created the table between our check and create.
++            // That is a success for us; anything else is a real failure.
++            if (await this.knex.schema.hasTable(resolved)) {
++                return;
++            }
++            throw ex;
++        }
+     }
+ }
+diff --git a/packages/api-core-sql/src/createApiCoreSql.ts b/packages/api-core-sql/src/createApiCoreSql.ts
+index 982c0221..87c30b6e 100644
+--- a/packages/api-core-sql/src/createApiCoreSql.ts
++++ b/packages/api-core-sql/src/createApiCoreSql.ts
+@@ -13,30 +13,64 @@ interface CreateApiCoreSqlParams {
+     tableNamePrefix?: string;
+ }
+ 
++interface CachedApiCoreSql {
++    storageOperations: ApiCoreStorageOperations;
++    manifestLoader: SqlServiceManifestLoader;
++}
++
++/**
++ * Storage operations are stateless apart from the TableManager's "known tables" cache, so they are
++ * built once per Knex client + table prefix and reused. Building them per call (the factory is
++ * invoked on every request) leaked a TableManager per request and re-ran every table existence check.
++ * Keyed weakly on the Knex client so a destroyed/discarded client does not stay pinned.
++ */
++const cache = new WeakMap<Knex, Map<string, CachedApiCoreSql>>();
++
++const build = (knex: Knex, tableNamePrefix: string | undefined): CachedApiCoreSql => {
++    const tableManager = new TableManager(knex, tableNamePrefix);
++
++    return {
++        manifestLoader: new SqlServiceManifestLoader(knex, tableManager),
++        storageOperations: {
++            usersStorageOperations: createUsersStorageOperations({
++                knex,
++                tableManager
++            }),
++            tenancyStorageOperations: createTenancyStorageOperations({
++                knex,
++                tableManager
++            }),
++            securityStorageOperations: createSecurityStorageOperations({
++                knex,
++                tableManager
++            }),
++            keyValueStorageOperations: createKeyValueStorageOperations({
++                knex,
++                tableManager
++            })
++        }
++    };
++};
++
+ export const createApiCoreSql = ({
+     knex,
+     tableNamePrefix
+ }: CreateApiCoreSqlParams): ApiCoreStorageOperations => {
+-    const tableManager = new TableManager(knex, tableNamePrefix);
++    let byPrefix = cache.get(knex);
++    if (!byPrefix) {
++        byPrefix = new Map();
++        cache.set(knex, byPrefix);
++    }
+ 
+-    ServiceDiscovery.setLoader(new SqlServiceManifestLoader(knex, tableManager));
++    const key = tableNamePrefix ?? "";
++    let entry = byPrefix.get(key);
++    if (!entry) {
++        entry = build(knex, tableNamePrefix);
++        byPrefix.set(key, entry);
++    }
+ 
+-    return {
+-        usersStorageOperations: createUsersStorageOperations({
+-            knex,
+-            tableManager
+-        }),
+-        tenancyStorageOperations: createTenancyStorageOperations({
+-            knex,
+-            tableManager
+-        }),
+-        securityStorageOperations: createSecurityStorageOperations({
+-            knex,
+-            tableManager
+-        }),
+-        keyValueStorageOperations: createKeyValueStorageOperations({
+-            knex,
+-            tableManager
+-        })
+-    };
++    // Keep previous behaviour: the most recently created storage operations own service discovery.
++    ServiceDiscovery.setLoader(entry.manifestLoader);
++
++    return entry.storageOperations;
+ };
+diff --git a/packages/api-core-sql/vitest.setup.ts b/packages/api-core-sql/vitest.setup.ts
+new file mode 100644
+index 00000000..bb4c9279
+--- /dev/null
++++ b/packages/api-core-sql/vitest.setup.ts
+@@ -0,0 +1,5 @@
++import { createTestConfig } from "../../testing";
++
++export default async () => {
++    return createTestConfig({ path: import.meta.dirname });
++};

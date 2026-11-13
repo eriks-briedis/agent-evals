@@ -1,0 +1,197 @@
+diff --git a/packages/api-core-sql/__tests__/storageOperationsSingleton.test.ts b/packages/api-core-sql/__tests__/storageOperationsSingleton.test.ts
+new file mode 100644
+index 00000000..5800c1ed
+--- /dev/null
++++ b/packages/api-core-sql/__tests__/storageOperationsSingleton.test.ts
+@@ -0,0 +1,70 @@
++import { describe, it, expect } from "vitest";
++import knexLib from "knex";
++import { ApiCoreStorageOperationsFactory } from "@webiny/api-core";
++import { ApiCoreSqlFeature } from "~/ApiCoreSqlFeature.js";
++import { TableManager } from "~/TableManager.js";
++
++const createKnex = () =>
++    knexLib({
++        client: "better-sqlite3",
++        connection: { filename: ":memory:" },
++        useNullAsDefault: true,
++        pool: { min: 1, max: 1 }
++    });
++
++const managerCount = () =>
++    ((globalThis as Record<string, unknown>).__sqlTableManagers as unknown[] | undefined)
++        ?.length ?? 0;
++
++describe("api-core-sql storage operations", () => {
++    it("factory returns the same storage operations and creates no extra TableManagers", () => {
++        const knex = createKnex();
++        // Minimal container: captures the instance the feature registers for the factory.
++        const instances = new Map<unknown, unknown>();
++        const container = {
++            registerInstance: (abstraction: unknown, instance: unknown) =>
++                instances.set(abstraction, instance)
++        };
++        ApiCoreSqlFeature.register(container as any, { knex, tableNamePrefix: "singleton" });
++        const factory = instances.get(
++            ApiCoreStorageOperationsFactory
++        ) as ApiCoreStorageOperationsFactory.Interface;
++
++        const first = factory.create();
++        const before = managerCount();
++        for (let i = 0; i < 100; i++) {
++            expect(factory.create()).toBe(first);
++        }
++        expect(managerCount()).toBe(before);
++        return knex.destroy();
++    });
++
++    it("concurrent ensure() on one manager creates the table once", async () => {
++        const knex = createKnex();
++        const manager = new TableManager(knex, "conc");
++        let creates = 0;
++        await Promise.all(
++            Array.from({ length: 20 }, () =>
++                manager.ensure("items", table => {
++                    creates++;
++                    table.text("id").primary();
++                })
++            )
++        );
++        expect(creates).toBe(1);
++        expect(await knex.schema.hasTable("conc_items")).toBe(true);
++        await knex.destroy();
++    });
++
++    it("two managers racing to create the same table both succeed", async () => {
++        const knex = createKnex();
++        const a = new TableManager(knex, "race");
++        const b = new TableManager(knex, "race");
++        const creator = (table: any) => table.text("id").primary();
++        await expect(
++            Promise.all([a.ensure("items", creator), b.ensure("items", creator)])
++        ).resolves.toBeDefined();
++        expect(await knex.schema.hasTable("race_items")).toBe(true);
++        await knex.destroy();
++    });
++});
+diff --git a/packages/api-core-sql/src/ApiCoreSqlFeature.ts b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+index a844e8f1..c9fccbcf 100644
+--- a/packages/api-core-sql/src/ApiCoreSqlFeature.ts
++++ b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+@@ -1,5 +1,6 @@
+ import { createFeature } from "@webiny/feature/api";
+ import type { Knex } from "knex";
++import type { ApiCoreStorageOperations } from "@webiny/api-core/types/core.js";
+ import { ApiCoreStorageOperationsFactory } from "@webiny/api-core";
+ import { createApiCoreSql } from "./createApiCoreSql.js";
+ 
+@@ -11,12 +12,23 @@ export interface ApiCoreSqlConfig {
+ /**
+  * Registers the SQL implementation of ApiCoreStorageOperationsFactory. ApiCoreFeature.register
+  * resolves + builds it. Mirrors ApiCoreDdbFeature.
++ *
++ * The factory is registered once (root container) but `create()` is called on every request, so
++ * the storage operations are built lazily once and reused. Building them per request would create
++ * a new TableManager each time — leaking memory and re-checking table existence on every request.
+  */
+ export const ApiCoreSqlFeature = createFeature<ApiCoreSqlConfig>({
+     name: "ApiCoreSql",
+     register(container, { knex, tableNamePrefix }) {
++        let storageOperations: ApiCoreStorageOperations | undefined;
++
+         container.registerInstance(ApiCoreStorageOperationsFactory, {
+-            create: () => createApiCoreSql({ knex, tableNamePrefix })
++            create: () => {
++                if (!storageOperations) {
++                    storageOperations = createApiCoreSql({ knex, tableNamePrefix });
++                }
++                return storageOperations;
++            }
+         });
+     }
+ });
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..0314a89e 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,11 +10,15 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+         this.prefix = prefix ? `${prefix}_` : "";
+ 
++        // Test-only hook: test setup resets every registered manager after dropping tables.
++        // The manager is a long-lived singleton (see ApiCoreSqlFeature), so this registry
++        // does not grow per request.
+         const g = globalThis as Record<string, unknown>;
+         const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+         managers.push(this);
+@@ -22,6 +26,7 @@ export class TableManager implements ITableManager {
+ 
+     public reset(): void {
+         this.verified.clear();
++        this.pending.clear();
+     }
+ 
+     public resolve(tableName: string): string {
+@@ -38,10 +43,37 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
++        // Share the in-flight check/create between concurrent callers of this manager, so they
++        // don't race each other into "table already exists". Cleared on settle; on failure a
++        // later call retries.
++        let promise = this.pending.get(resolved);
++        if (!promise) {
++            promise = this.doEnsure(resolved, creator).finally(() => {
++                if (this.pending.get(resolved) === promise) {
++                    this.pending.delete(resolved);
++                }
++            });
++            this.pending.set(resolved, promise);
++        }
++        return promise;
++    }
++
++    private async doEnsure(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
+         const exists = await this.knex.schema.hasTable(resolved);
+ 
+         if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++            try {
++                await this.knex.schema.createTable(resolved, creator);
++            } catch (err) {
++                // Another manager / process / connection may have created the table between our
++                // hasTable and createTable. If it exists now, that's success.
++                if (!(await this.knex.schema.hasTable(resolved))) {
++                    throw err;
++                }
++            }
+         }
+ 
+         this.verified.add(resolved);
+diff --git a/packages/api-core-sql/vitest.setup.ts b/packages/api-core-sql/vitest.setup.ts
+new file mode 100644
+index 00000000..116ecb02
+--- /dev/null
++++ b/packages/api-core-sql/vitest.setup.ts
+@@ -0,0 +1,12 @@
++import { createTestConfig } from "../../testing";
++
++export default async () => {
++    const presets = await import(`${import.meta.dirname}/__tests__/__api__/presets.js`).then(
++        m => m.default
++    );
++
++    return createTestConfig({
++        path: import.meta.dirname,
++        presets
++    });
++};

@@ -1,0 +1,89 @@
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..b7ad5010 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,14 +10,11 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+         this.prefix = prefix ? `${prefix}_` : "";
+-
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+-        managers.push(this);
+     }
+ 
+     public reset(): void {
+@@ -38,12 +35,30 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
+-        const exists = await this.knex.schema.hasTable(resolved);
+-
+-        if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++        let pending = this.pending.get(resolved);
++        if (!pending) {
++            pending = this.verify(resolved, creator).finally(() => {
++                this.pending.delete(resolved);
++            });
++            this.pending.set(resolved, pending);
+         }
++        return pending;
++    }
+ 
++    private async verify(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        if (!(await this.knex.schema.hasTable(resolved))) {
++            try {
++                await this.knex.schema.createTable(resolved, creator);
++            } catch (err) {
++                // Another manager/process may have created the table in the meantime.
++                if (!(await this.knex.schema.hasTable(resolved))) {
++                    throw err;
++                }
++            }
++        }
+         this.verified.add(resolved);
+     }
+ }
+diff --git a/packages/api-core-sql/src/createApiCoreSql.ts b/packages/api-core-sql/src/createApiCoreSql.ts
+index 982c0221..41181001 100644
+--- a/packages/api-core-sql/src/createApiCoreSql.ts
++++ b/packages/api-core-sql/src/createApiCoreSql.ts
+@@ -13,10 +13,29 @@ interface CreateApiCoreSqlParams {
+     tableNamePrefix?: string;
+ }
+ 
++const cache = new WeakMap<Knex, Map<string, ApiCoreStorageOperations>>();
++
+ export const createApiCoreSql = ({
+     knex,
+     tableNamePrefix
+ }: CreateApiCoreSqlParams): ApiCoreStorageOperations => {
++    let byPrefix = cache.get(knex);
++    if (!byPrefix) {
++        byPrefix = new Map();
++        cache.set(knex, byPrefix);
++    }
++    const key = tableNamePrefix ?? "";
++    const existing = byPrefix.get(key);
++    if (existing) {
++        return existing;
++    }
++
++    const operations = build(knex, tableNamePrefix);
++    byPrefix.set(key, operations);
++    return operations;
++};
++
++const build = (knex: Knex, tableNamePrefix?: string): ApiCoreStorageOperations => {
+     const tableManager = new TableManager(knex, tableNamePrefix);
+ 
+     ServiceDiscovery.setLoader(new SqlServiceManifestLoader(knex, tableManager));

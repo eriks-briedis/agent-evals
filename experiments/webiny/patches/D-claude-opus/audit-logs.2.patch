@@ -1,0 +1,106 @@
+diff --git a/packages/api-audit-logs/__tests__/subscriptionHandlers.test.ts b/packages/api-audit-logs/__tests__/subscriptionHandlers.test.ts
+new file mode 100644
+index 00000000..6e0f2f7f
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptionHandlers.test.ts
+@@ -0,0 +1,53 @@
++import { describe, expect, it } from "vitest";
++import { EntryAfterCreateEventHandler } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/index.js";
++import { useHandler } from "./helpers/useHandler";
++import { AuditLogsContext } from "~/abstractions.js";
++
++const isSql = process.env.WEBINY_STORAGE?.includes("sql");
++
++/**
++ * Subscription handlers do not receive the request context directly: they inject the
++ * `AuditLogsContext` token and pass it to `getAuditConfig`, which reads `context.auditLogs`.
++ * If the token resolves to anything other than the full context, every handler logs
++ * "No AuditLogs defined." and nothing is ever written.
++ */
++describe.skipIf(isSql)("audit log subscription handlers", () => {
++    it("should resolve the AuditLogsContext token to the full context", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const resolved = context.container.resolve(AuditLogsContext);
++
++        expect(resolved.auditLogs).toBeDefined();
++        expect(resolved.auditLogs).toBe(context.auditLogs);
++    });
++
++    it("should write an audit log when a CMS entry is created", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const handlers = context.container.resolveAll(EntryAfterCreateEventHandler);
++        expect(handlers.length).toBeGreaterThan(0);
++
++        const entryId = "auditLogSubscriptionTestEntry";
++        const event = {
++            payload: {
++                model: { modelId: "article", isPrivate: false },
++                entry: { id: `${entryId}#0001`, entryId, values: { title: "Hello" } }
++            }
++        } as unknown as EntryAfterCreateEventHandler.Event;
++
++        for (const h of handlers) {
++            await h.handle(event);
++        }
++
++        const result = await context.auditLogs.listAuditLogs({ entityId: entryId });
++        expect(result.error).toBeUndefined();
++        expect(result.items).toHaveLength(1);
++        expect(result.items[0]).toMatchObject({
++            entityId: entryId,
++            message: "Entry created",
++            app: "HEADLESS_CMS"
++        });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..63988c90 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,9 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                // The token is the full audit-logs context (see abstractions.ts): subscription
++                // handlers pass it to getAuditConfig, which reads `context.auditLogs`.
++                container.registerInstance(AuditLogsContext, ctx as AuditLogsContext.Interface);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..834fc7ff 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +133,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

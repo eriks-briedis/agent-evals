@@ -1,0 +1,249 @@
+diff --git a/packages/api-headless-cms/__tests__/features/contentModel/modelCacheIdentity.test.ts b/packages/api-headless-cms/__tests__/features/contentModel/modelCacheIdentity.test.ts
+new file mode 100644
+index 00000000..6b9fa851
+--- /dev/null
++++ b/packages/api-headless-cms/__tests__/features/contentModel/modelCacheIdentity.test.ts
+@@ -0,0 +1,111 @@
++import { describe, expect, it } from "vitest";
++import type { Container } from "@webiny/di";
++import { useHandler } from "~tests/testHelpers/useHandler";
++import type { PermissionsArg } from "~tests/testHelpers/helpers";
++import { GetModelUseCase } from "~/features/contentModel/GetModel/index.js";
++import { ListModelsUseCase } from "~/features/contentModel/ListModels/index.js";
++import { ModelFactory } from "~/features/modelBuilder/index.js";
++import { IdentityContext } from "@webiny/api-core/exports/api/security.js";
++
++const PUBLIC_MODEL_ID = "modelCacheIdentityPublic";
++
++class TestModelImpl implements ModelFactory.Interface {
++    public async execute(builder: ModelFactory.Builder) {
++        return [
++            builder
++                .public({
++                    modelId: PUBLIC_MODEL_ID,
++                    name: "Model Cache Identity Public",
++                    singularApiName: "ModelCacheIdentityPublic",
++                    pluralApiName: "ModelCacheIdentityPublics",
++                    group: "test"
++                })
++                .fields(fields => ({
++                    title: fields.text().label("Title")
++                }))
++        ];
++    }
++}
++
++const TestModel = ModelFactory.createImplementation({
++    implementation: TestModelImpl,
++    dependencies: []
++});
++
++const createContainer = async (permissions: PermissionsArg[]) => {
++    const { handler } = useHandler({
++        permissions,
++        plugins: [(c: Container) => c.register(TestModel)]
++    });
++    const { container } = (await handler({
++        path: "/cms/manage",
++        headers: { "x-tenant": "root" }
++    })) as { container: Container };
++    return container;
++};
++
++/*
++ * The model list is cached per tenant for the whole request. It must not depend on which identity
++ * triggered the first fetch: a denied, permission-checked read must not hide code-defined models
++ * from code that later runs under `withoutAuthorization` in the same request.
++ */
++describe("content model cache and identity", () => {
++    it("a denied read does not hide code-defined models from withoutAuthorization reads", async () => {
++        const container = await createContainer([]);
++        const identityContext = container.resolve(IdentityContext);
++        const getModel = container.resolve(GetModelUseCase);
++        const listModels = container.resolve(ListModelsUseCase);
++
++        // 1. A permission-checked read by an identity without CMS permissions runs first.
++        const denied = await getModel.execute(PUBLIC_MODEL_ID);
++        expect(denied.isFail()).toBe(true);
++
++        // 2. Reads under `withoutAuthorization` must see every model of the tenant.
++        const systemGet = await identityContext.withoutAuthorization(() =>
++            getModel.execute(PUBLIC_MODEL_ID)
++        );
++        expect(systemGet.isOk()).toBe(true);
++        expect(systemGet.value.modelId).toBe(PUBLIC_MODEL_ID);
++
++        const systemList = await identityContext.withoutAuthorization(() =>
++            listModels.execute()
++        );
++        expect(systemList.isOk()).toBe(true);
++        expect(systemList.value.map(m => m.modelId)).toContain(PUBLIC_MODEL_ID);
++
++        // 3. Permission-checked reads keep denying access afterwards.
++        const deniedAgain = await getModel.execute(PUBLIC_MODEL_ID);
++        expect(deniedAgain.isFail()).toBe(true);
++
++        const deniedList = await listModels.execute();
++        expect(deniedList.isFail()).toBe(true);
++    });
++
++    it("an identity restricted to other models does not see code-defined models it cannot access", async () => {
++        const container = await createContainer([
++            { name: "cms.endpoint.manage" },
++            { name: "cms.contentModelGroup", rwd: "r", groups: { root: ["someOtherGroup"] } },
++            { name: "cms.contentModel", rwd: "r", models: { root: ["someOtherModel"] } }
++        ] as PermissionsArg[]);
++        const identityContext = container.resolve(IdentityContext);
++        const getModel = container.resolve(GetModelUseCase);
++        const listModels = container.resolve(ListModelsUseCase);
++
++        const list = await listModels.execute();
++        expect(list.isOk()).toBe(true);
++        expect(list.value.map(m => m.modelId)).not.toContain(PUBLIC_MODEL_ID);
++
++        expect((await getModel.execute(PUBLIC_MODEL_ID)).isFail()).toBe(true);
++
++        const systemList = await identityContext.withoutAuthorization(() =>
++            listModels.execute()
++        );
++        expect(systemList.isOk()).toBe(true);
++        expect(systemList.value.map(m => m.modelId)).toContain(PUBLIC_MODEL_ID);
++
++        // Still filtered for the identity after the system read populated nothing new.
++        const listAgain = await listModels.execute();
++        expect(listAgain.isOk()).toBe(true);
++        expect(listAgain.value.map(m => m.modelId)).not.toContain(PUBLIC_MODEL_ID);
++    });
++});
+diff --git a/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts b/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts
+index dc0b38fd..4c377933 100644
+--- a/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts
++++ b/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts
+@@ -1,11 +1,9 @@
+-import { AccessControl } from "~/features/shared/abstractions.js";
+ import {
+     CmsModelPluginInstance,
+     PluginModelsProvider as ProviderAbstraction
+ } from "./abstractions.js";
+ import type { CmsModel } from "~/types/index.js";
+ import type { CmsModelPlugin } from "~/plugins/CmsModelPlugin.js";
+-import { filterAsync } from "~/utils/filterAsync.js";
+ import {
+     ModelsProvider,
+     type IModelsProvider
+@@ -15,11 +13,14 @@ import {
+  * PluginModelsProvider implementation that fetches models from:
+  * 1. Legacy CmsModelPlugin instances (resolved from the DI container)
+  * 2. New ModelBuilder providers (public and private)
++ *
++ * NOTE: no access control is applied here. The result is cached per tenant (see `ModelsFetcher`),
++ * so it must not depend on the identity that happened to trigger the first fetch in a request.
++ * Permission checks belong to the use cases (`GetModelUseCase`, `ListModelsUseCase`, ...).
+  */
+ class PluginModelsProviderImpl implements ProviderAbstraction.Interface {
+     public constructor(
+         private modelPlugins: CmsModelPlugin[],
+-        private accessControl: AccessControl.Interface,
+         private modelsProvider: IModelsProvider
+     ) {}
+ 
+@@ -43,15 +44,11 @@ class PluginModelsProviderImpl implements ProviderAbstraction.Interface {
+                 };
+             }) as unknown as CmsModel[];
+ 
+-        const allowedLegacyModels = await filterAsync(legacyModels, model => {
+-            return this.accessControl.canAccessModel({ model });
+-        });
+-
+-        // Get models from new builder providers. These already have access control applied.
++        // Get models from new builder providers.
+         const builderModels = await this.modelsProvider.list(tenant);
+ 
+         // Combine both sources
+-        return [...allowedLegacyModels, ...builderModels];
++        return [...legacyModels, ...builderModels];
+     }
+ 
+     private ensureTypeTag(model: Pick<CmsModel, "tags">) {
+@@ -68,5 +65,5 @@ class PluginModelsProviderImpl implements ProviderAbstraction.Interface {
+ 
+ export const PluginModelsProvider = ProviderAbstraction.createImplementation({
+     implementation: PluginModelsProviderImpl,
+-    dependencies: [[CmsModelPluginInstance, { multiple: true }], AccessControl, ModelsProvider]
++    dependencies: [[CmsModelPluginInstance, { multiple: true }], ModelsProvider]
+ });
+diff --git a/packages/api-headless-cms/src/features/modelBuilder/feature.ts b/packages/api-headless-cms/src/features/modelBuilder/feature.ts
+index 4abaf3c3..7033e3f8 100644
+--- a/packages/api-headless-cms/src/features/modelBuilder/feature.ts
++++ b/packages/api-headless-cms/src/features/modelBuilder/feature.ts
+@@ -15,7 +15,6 @@ import { JsonFieldType } from "./fields/JsonFieldType.js";
+ import { SearchableJsonFieldType } from "./fields/SearchableJsonFieldType.js";
+ // import { LocationFieldType } from "./fields/LocationFieldType.js";
+ import { FieldBuilderRegistry as FieldsRegistryAbstraction, ModelFactory } from "./abstractions.js";
+-import { AccessControl } from "~/features/shared/abstractions.js";
+ import { ModelsProvider as ModelsProviderAbstraction } from "./models/abstractions.js";
+ import { ModelsProvider } from "./models/ModelsProvider.js";
+ import { UiSeparatorFieldType } from "./fields/UiSeparatorFieldType.js";
+@@ -49,19 +48,10 @@ export const ModelBuilderFeature = createFeature({
+ 
+         // Register unified models provider
+         container.registerFactory(ModelsProviderAbstraction, () => {
+-            let accessControl: AccessControl.Interface | undefined = undefined;
+-            try {
+-                // TODO: add `container.resolveOptional`
+-                accessControl = container.resolve(AccessControl);
+-            } catch {
+-                // It's an optional dependency!
+-            }
+-
+             return new ModelsProvider(
+                 // TODO: introduce a `lazy: true` dependency modifier, which will inject a getter.
+                 () => container.resolveAll(ModelFactory),
+-                container.resolve(FieldsRegistryAbstraction),
+-                accessControl
++                container.resolve(FieldsRegistryAbstraction)
+             );
+         });
+     }
+diff --git a/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts b/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts
+index 9597e744..d5ae7a51 100644
+--- a/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts
++++ b/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts
+@@ -1,16 +1,19 @@
+ import { ModelsProvider as ProviderAbstraction } from "./abstractions.js";
+-import { AccessControl } from "~/features/shared/abstractions.js";
+ import { ModelFactory } from "../abstractions.js";
+ import { FieldBuilderRegistry } from "../abstractions.js";
+ import type { CmsModel } from "~/types/index.js";
+-import { filterAsync } from "~/utils/filterAsync.js";
+ import { ModelBuilder } from "./ModelBuilder.js";
+ 
++/**
++ * Builds all code-defined (ModelBuilder) models for a tenant.
++ *
++ * No access control is applied here: the result ends up in the per-tenant `ModelCache`, so it must
++ * be identity-independent. Permission checks are done by the content model use cases.
++ */
+ export class ModelsProvider implements ProviderAbstraction.Interface {
+     public constructor(
+         private getModels: () => ModelFactory.Interface[],
+-        private fieldsRegistry: FieldBuilderRegistry.Interface,
+-        private accessControl: AccessControl.Interface | undefined
++        private fieldsRegistry: FieldBuilderRegistry.Interface
+     ) {}
+ 
+     async list(tenant: string): Promise<CmsModel[]> {
+@@ -35,12 +38,6 @@ export class ModelsProvider implements ProviderAbstraction.Interface {
+             }
+         }
+ 
+-        if (!this.accessControl) {
+-            return allModels;
+-        }
+-        // Apply access control filtering
+-        return filterAsync(allModels, model => {
+-            return this.accessControl!.canAccessModel({ model });
+-        });
++        return allModels;
+     }
+ }
