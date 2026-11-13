@@ -1,0 +1,99 @@
+diff --git a/packages/api-core-sql/src/ApiCoreSqlFeature.ts b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+index a844e8f1b0..a471791443 100644
+--- a/packages/api-core-sql/src/ApiCoreSqlFeature.ts
++++ b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+@@ -11,12 +11,19 @@ export interface ApiCoreSqlConfig {
+ /**
+  * Registers the SQL implementation of ApiCoreStorageOperationsFactory. ApiCoreFeature.register
+  * resolves + builds it. Mirrors ApiCoreDdbFeature.
++ *
++ * The storage operations are built once, here, and `create()` hands out the same object. It runs on
++ * every request (ApiCoreFeature is per-request), and building per request created a new TableManager
++ * each time: every one stayed in the global test registry, so a long-running server leaked one per
++ * request, and each started with no verified tables. The operations hold no per-request state.
+  */
+ export const ApiCoreSqlFeature = createFeature<ApiCoreSqlConfig>({
+     name: "ApiCoreSql",
+     register(container, { knex, tableNamePrefix }) {
++        const storageOperations = createApiCoreSql({ knex, tableNamePrefix });
++
+         container.registerInstance(ApiCoreStorageOperationsFactory, {
+-            create: () => createApiCoreSql({ knex, tableNamePrefix })
++            create: () => storageOperations
+         });
+     }
+ });
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af54d..6e729de667 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,6 +10,7 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+@@ -22,6 +23,7 @@ export class TableManager implements ITableManager {
+ 
+     public reset(): void {
+         this.verified.clear();
++        this.pending.clear();
+     }
+ 
+     public resolve(tableName: string): string {
+@@ -38,12 +40,52 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
++        // One TableManager serves every request, so concurrent first requests share a single
++        // hasTable+createTable instead of racing into "table already exists". Cleared on failure so
++        // a later call can retry.
++        const pending = this.pending.get(resolved);
++        if (pending) {
++            return pending;
++        }
++
++        const check = this.ensureTable(resolved, creator).finally(() => {
++            // Only remove our own entry: after reset() a newer check may own this table's slot.
++            if (this.pending.get(resolved) === check) {
++                this.pending.delete(resolved);
++            }
++        });
++        this.pending.set(resolved, check);
++
++        return check;
++    }
++
++    private async ensureTable(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
+         const exists = await this.knex.schema.hasTable(resolved);
+ 
+         if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++            await this.createTable(resolved, creator);
+         }
+ 
+         this.verified.add(resolved);
+     }
++
++    private async createTable(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        try {
++            await this.knex.schema.createTable(resolved, creator);
++        } catch (err) {
++            // Another process (or connection) may have created it in the meantime. If it exists now,
++            // that's success; otherwise the failure is real.
++            const exists = await this.knex.schema.hasTable(resolved);
++            if (exists) {
++                return;
++            }
++            throw err;
++        }
++    }
+ }

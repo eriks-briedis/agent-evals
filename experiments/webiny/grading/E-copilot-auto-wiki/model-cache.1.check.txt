@@ -1,0 +1,36 @@
+$ build -p @webiny/api-headless-cms (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-headless-cms
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.28s
+
+655 files generated in dist, total: 858.4 kB (264.1 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 1.81s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-headless-cms/__tests__/contentModel/modelsFetcherAccessControl.test.ts (exit 0)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v4.1.11 <work>/webiny-model-cache-866Ht6
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  07:48:20
+   Duration  5.50s (transform 3.48s, setup 4.48s, import 698ms, tests 224ms, environment 0ms)
+

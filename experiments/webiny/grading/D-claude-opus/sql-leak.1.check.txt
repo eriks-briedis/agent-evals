@@ -1,0 +1,36 @@
+$ build -p @webiny/api-core-sql (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-core-sql
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.04s
+
+15 files generated in dist, total: 31.1 kB (7.0 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 0.397s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-core-sql/__tests__/TableManager.test.ts (exit 0)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v4.1.11 <work>/webiny-sql-leak-CVvlQb
+
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  02:32:03
+   Duration  1.65s (transform 1.01s, setup 48ms, import 1.48s, tests 22ms, environment 0ms)
+

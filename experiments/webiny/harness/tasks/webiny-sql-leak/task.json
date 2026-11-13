@@ -1,0 +1,34 @@
+{
+  "id": "webiny-sql-leak",
+  "category": "replay",
+  "prepared": "../../prepared/webiny-sql-leak",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 5926,
+    "fix": "42a7560095",
+    "srcPaths": [
+      "packages/api-core-sql/src/ApiCoreSqlFeature.ts",
+      "packages/api-core-sql/src/TableManager.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-core-sql/__tests__/TableManager.test.ts",
+      "packages/api-core-sql/vitest.setup.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-core-sql/__tests__/TableManager.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "sql"
+    },
+    "minTests": 3
+  },
+  "prompt": "On the self-hosted SQL setup the API server's memory grows with every request, and every request checks again whether its database tables exist. Find the cause in the SQL core storage (`packages/api-core-sql`) and fix it. After the fix, serving many requests must not create additional `TableManager` instances: asking the storage operations factory repeatedly must give back the same storage operations. The shared instance must be safe under concurrency: concurrent first use of the same table, including by two managers racing to create it, must succeed.",
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything.",
+  "checks": {
+    "maxSizeRatio": 3,
+    "maxSourceFiles": 5
+  }
+}

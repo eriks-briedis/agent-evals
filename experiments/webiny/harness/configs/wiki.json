@@ -1,0 +1,7 @@
+{
+  "name": "wiki",
+  "flags": [],
+  "overlay": "wiki",
+  "wiki": { "paths": ["ai-context", "skills", "docs"] },
+  "env": {}
+}

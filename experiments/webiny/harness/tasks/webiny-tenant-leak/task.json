@@ -1,0 +1,34 @@
+{
+  "id": "webiny-tenant-leak",
+  "category": "replay",
+  "prepared": "../../prepared/webiny-tenant-leak",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 6185,
+    "fix": "1876f37ade",
+    "srcPaths": [
+      "packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-core/__tests__/tenancy/tenantContext.test.ts",
+      "packages/api-core/__tests__/tenancy/withTenantSiblingFields.test.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-core/__tests__/tenancy/tenantContext.test.ts",
+      "packages/api-core/__tests__/tenancy/withTenantSiblingFields.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "ddb"
+    },
+    "minTests": 8
+  },
+  "prompt": "In multi-tenant projects a GraphQL query sometimes returns data from the wrong tenant. It happens when one field of a query temporarily switches tenant through `TenantContext.withTenant()`, `withRootTenant()` or `withEachTenant()` (for example to load inherited permissions or a profile from the parent tenant) while a sibling field of the same query is still resolving: the sibling reads the switched tenant instead of the request's own. Fix the leak so a temporary tenant switch is visible only to the code running inside its callback. Calling `setTenant()` inside such a callback must be rejected with an error and leave the request's tenant unchanged.",
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything.",
+  "checks": {
+    "maxSizeRatio": 3,
+    "maxSourceFiles": 4
+  }
+}

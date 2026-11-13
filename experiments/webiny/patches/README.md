@@ -1,10 +1,10 @@
 # Agent patches
 
-One file per session: the diff the agent left in the workspace, against the Webiny commit just before the real fix. Folder = row in the write-up, file = `<task>.<attempt>.patch`. Tests the agents wrote are included; the hidden tests are not.
+One file per session: the diff the agent left in the workspace, against the Webiny commit just before the real fix. Folder = row in the write-up, file = `<task>.<attempt>.patch`. Tests the agents wrote are included. The hidden tests are in [`../harness/tasks/`](../harness/README.md) and each session's grading output is in [`../grading/`](../grading/README.md).
 
 Two of the 84 sessions are left out (`E-copilot-auto-wiki`: `sql-leak.1`, `model-cache.1`) because they changed files in Webiny packages that are not MIT-licensed. Their numbers are still in `sessions.csv`.
 
-The patches contain lines of Webiny source code as diff context. That code is from MIT-licensed packages of [webiny/webiny-js](https://github.com/webiny/webiny-js) and is covered by this notice:
+The patches, and the `fix.patch` and `hidden/` files under `../harness/tasks/`, contain Webiny source code. That code is from MIT-licensed packages of [webiny/webiny-js](https://github.com/webiny/webiny-js) and is covered by this notice:
 
 ```
 Copyright (c) Webiny Inc.

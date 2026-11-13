@@ -1,0 +1,35 @@
+{
+  "id": "webiny-model-cache",
+  "category": "replay",
+  "prepared": "../../prepared/webiny-model-cache",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 5912,
+    "fix": "16ad7efadc",
+    "srcPaths": [
+      "packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts",
+      "packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts",
+      "packages/api-headless-cms/src/features/modelBuilder/feature.ts",
+      "packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-headless-cms/__tests__/contentModel/modelsFetcherAccessControl.test.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-headless-cms/__tests__/contentModel/modelsFetcherAccessControl.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "ddb"
+    },
+    "minTests": 1
+  },
+  "prompt": "The GraphQL schema the API builds depends on who made the first call in a request. When a permission-checked read of content models by an anonymous or low-privilege identity happens first, later code in the same request that runs under `withoutAuthorization` (for example building the tenant schema, which needs the `wbyTenant` model) gets a model list with code-defined models missing. Reads under `withoutAuthorization` must always see every model of the tenant, whatever ran earlier in the request, and permission-checked use cases must keep denying access exactly as before.",
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything.",
+  "checks": {
+    "maxSizeRatio": 3,
+    "maxSourceFiles": 7
+  }
+}

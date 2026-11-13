@@ -1,0 +1,36 @@
+$ build -p @webiny/api-aco (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-aco
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.22s
+
+197 files generated in dist, total: 239.6 kB (77.8 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 1.222s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts (exit 0)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v4.1.11 <work>/webiny-flp-logging-ANAODu
+
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)
+   Start at  03:02:20
+   Duration  6.52s (transform 4.07s, setup 4.49s, import 1.40s, tests 531ms, environment 0ms)
+

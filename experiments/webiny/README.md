@@ -1,6 +1,6 @@
 # Experiment: Copilot CLI vs Claude Code on real Webiny bug fixes
 
-By Eriks Briedis, November 2026. 84 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with [`evals.mjs`](../../evals.mjs). Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/).
+By Eriks Briedis, November 2026. 84 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with the runner in [`harness/`](harness/README.md). Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/). What the grader recorded: [`grading/`](grading/README.md).
 
 ![Copilot CLI and Claude Code on the same model](same-model-tie.png)
 
@@ -11,7 +11,7 @@ Copilot CLI often spends far more effort than a task needs. Is that the harness 
 ## Method
 
 - **Tasks:** six merged bug-fix PRs. The agent gets the repo at the commit before the fix, already installed and built, plus a ticket describing the symptoms.
-- **Grading:** the tests from the real fix are hidden from the agent and run afterwards. A session passes when those tests pass and the change stays within size limits relative to the real fix.
+- **Grading:** the tests from the real fix are hidden from the agent and run afterwards. A session passes when those tests pass and the change stays within size limits relative to the real fix. Tasks, hidden tests and limits are in [`harness/`](harness/README.md).
 - **Size:** source lines the agent changed divided by the lines in the real fix. Tests and markdown are not counted.
 - **Context:** all agent instruction files (`AGENTS.md`, `CLAUDE.md`, skills, MCP config, `ai-context/`) were removed from the repo, except in the wiki rows.
 - **Runs:** non-interactive, one session per attempt, three attempts per task. The wiki rows have one attempt per task.
@@ -105,4 +105,4 @@ Every ticket was followed by the same repo notes: how to run Yarn, tests, type c
 
 ## Reproduce on your own repo
 
-Use [`evals.mjs`](../../README.md) in this repo. It runs the same kind of replay on any git repo: pick fix commits, describe the problem, define the setups to compare.
+Use [`evals.mjs`](../../README.md) in this repo. It is the generalised version of the runner used here and runs the same kind of replay on any git repo: pick fix commits, describe the problem, define the setups to compare.

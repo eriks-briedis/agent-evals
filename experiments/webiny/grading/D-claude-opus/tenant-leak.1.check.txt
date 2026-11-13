@@ -1,0 +1,37 @@
+$ build -p @webiny/api-core (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-core
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.50s
+
+474 files generated in dist, total: 494.4 kB (159.3 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Copied LICENSE.
+Done! Build finished in 1.872s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-core/__tests__/tenancy/tenantContext.test.ts packages/api-core/__tests__/tenancy/withTenantSiblingFields.test.ts (exit 0)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v5.0.5 <work>/webiny-tenant-leak-Uio2Eg
+
+
+ Test Files  2 passed (2)
+      Tests  8 passed (8)
+   Start at  02:55:53
+   Duration  4.34s (setup 45%, tests 28%, transform 16%, import 10%)
+

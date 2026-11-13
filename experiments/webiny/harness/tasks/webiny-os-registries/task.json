@@ -1,0 +1,33 @@
+{
+  "id": "webiny-os-registries",
+  "category": "replay",
+  "prepared": "../../prepared/webiny-os-registries",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 5980,
+    "fix": "d9d4755c3a",
+    "srcPaths": [
+      "packages/api-opensearch/src/features/OpenSearchIndex/feature.ts",
+      "packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-opensearch/__tests__/registriesPerRequest.test.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-opensearch/__tests__/registriesPerRequest.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "ddb-os,ddb"
+    },
+    "minTests": 1
+  },
+  "prompt": "Custom OpenSearch query-builder operators and indexes registered by an extension are silently ignored: `OpenSearchQueryBuilderOperatorRegistry` and `OpenSearchIndexRegistry` only ever contain the built-in ones. Extensions register theirs per request. An operator or index registered in a request's container must show up in that request's registry, must not show up in another request's or in the root's, and the built-in ones must stay available everywhere.",
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything.",
+  "checks": {
+    "maxSizeRatio": 5,
+    "maxSourceFiles": 5
+  }
+}
