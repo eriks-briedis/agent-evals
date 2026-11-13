@@ -1,0 +1,293 @@
+diff --git a/packages/api-headless-cms/__tests__/features/contentModel/modelCacheAuthorization.test.ts b/packages/api-headless-cms/__tests__/features/contentModel/modelCacheAuthorization.test.ts
+new file mode 100644
+index 00000000..2e3e4c56
+--- /dev/null
++++ b/packages/api-headless-cms/__tests__/features/contentModel/modelCacheAuthorization.test.ts
+@@ -0,0 +1,177 @@
++import { beforeEach } from "vitest";
++import { describe } from "vitest";
++import { expect } from "vitest";
++import { it } from "vitest";
++import type { Container } from "@webiny/di";
++import { TestPermissions } from "@webiny/api-core-testing";
++import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/index.js";
++import { TenantContext } from "@webiny/api-core/features/tenancy/TenantContext/index.js";
++import type { Tenant } from "@webiny/api-core/types/tenancy.js";
++import { GetModelUseCase } from "~/features/contentModel/GetModel/index.js";
++import { ListModelsUseCase } from "~/features/contentModel/ListModels/index.js";
++import { ModelCache } from "~/features/contentModel/shared/abstractions.js";
++import { ModelFactory } from "~/features/modelBuilder/index.js";
++import { CmsModelPlugin } from "~/plugins/CmsModelPlugin.js";
++import { useHandler } from "~tests/testHelpers/useHandler.js";
++
++class TestModelsImpl implements ModelFactory.Interface {
++    async execute(builder: ModelFactory.Builder) {
++        return [
++            builder
++                .public({ modelId: "allowedModel", name: "Allowed Model", group: "ungrouped" })
++                .fields(fields => ({ title: fields.text().label("Title") })),
++            builder
++                .public({ modelId: "hiddenBuilder", name: "Hidden Builder", group: "ungrouped" })
++                .fields(fields => ({ title: fields.text().label("Title") }))
++        ];
++    }
++}
++
++const TestModels = ModelFactory.createImplementation({
++    implementation: TestModelsImpl,
++    dependencies: []
++});
++
++const legacyModel = new CmsModelPlugin({
++    noValidate: true,
++    modelId: "hiddenLegacy",
++    name: "Hidden Legacy",
++    group: "ungrouped",
++    fields: []
++});
++
++const tenantModel = new CmsModelPlugin({
++    noValidate: true,
++    modelId: "otherTenantModel",
++    name: "Other Tenant Model",
++    group: "ungrouped",
++    tenant: "other",
++    fields: []
++});
++
++const otherTenant: Tenant = {
++    id: "other",
++    name: "Other",
++    description: "",
++    status: "enabled",
++    isInstalled: true,
++    settings: {} as Tenant["settings"],
++    tags: [],
++    parent: "root",
++    createdOn: new Date().toISOString(),
++    savedOn: new Date().toISOString()
++};
++
++describe("model cache authorization", () => {
++    let container: Container;
++
++    beforeEach(async () => {
++        const { handler } = useHandler({
++            permissions: [
++                { name: "cms.contentModelGroup", rwd: "r", _src: "test" },
++                { name: "cms.contentModel", rwd: "r", models: ["allowedModel"], _src: "test" }
++            ],
++            plugins: [(c: Container) => c.register(TestModels), legacyModel, tenantModel]
++        });
++        const context = await handler({ path: "/cms/manage", headers: { "x-tenant": "root" } });
++        container = context.container;
++        container.resolve(ModelCache).clear();
++    });
++
++    it("does not cache a restricted list for later system reads", async () => {
++        const list = container.resolve(ListModelsUseCase);
++        const get = container.resolve(GetModelUseCase);
++        const identity = container.resolve(IdentityContext);
++
++        const restricted = await list.execute();
++        expect(restricted.isOk()).toBe(true);
++        expect(restricted.value.map(model => model.modelId)).toContain("allowedModel");
++        expect(restricted.value.map(model => model.modelId)).not.toContain("hiddenLegacy");
++        expect(restricted.value.map(model => model.modelId)).not.toContain("hiddenBuilder");
++
++        const all = await identity.withoutAuthorization(() => list.execute());
++        expect(all.isOk()).toBe(true);
++        expect(all.value.map(model => model.modelId)).toEqual(
++            expect.arrayContaining(["allowedModel", "hiddenLegacy", "hiddenBuilder"])
++        );
++        expect(all.value.map(model => model.modelId)).not.toContain("otherTenantModel");
++        const hidden = await identity.withoutAuthorization(() => get.execute("hiddenBuilder"));
++        expect(hidden.isOk()).toBe(true);
++    });
++
++    it("does not expose system-cached models to restricted reads", async () => {
++        const list = container.resolve(ListModelsUseCase);
++        const get = container.resolve(GetModelUseCase);
++        const identity = container.resolve(IdentityContext);
++
++        const all = await identity.withoutAuthorization(() => list.execute());
++        expect(all.value.map(model => model.modelId)).toContain("hiddenLegacy");
++        expect(all.value.map(model => model.modelId)).toContain("hiddenBuilder");
++
++        const restricted = await list.execute();
++        expect(restricted.value.map(model => model.modelId)).not.toContain("hiddenLegacy");
++        expect(restricted.value.map(model => model.modelId)).not.toContain("hiddenBuilder");
++        const hidden = await get.execute("hiddenBuilder");
++        expect(hidden.isFail()).toBe(true);
++        expect(hidden.error.code).toBe("Cms/Model/NotFound");
++    });
++
++    it("does not cache a denied get for later system reads", async () => {
++        const get = container.resolve(GetModelUseCase);
++        const list = container.resolve(ListModelsUseCase);
++        const identity = container.resolve(IdentityContext);
++
++        const denied = await get.execute("hiddenLegacy");
++        expect(denied.isFail()).toBe(true);
++        expect(denied.error.code).toBe("Cms/Model/NotFound");
++
++        const all = await identity.withoutAuthorization(() => list.execute());
++        expect(all.isOk()).toBe(true);
++        expect(all.value.map(model => model.modelId)).toEqual(
++            expect.arrayContaining(["hiddenLegacy", "hiddenBuilder"])
++        );
++        const hidden = await identity.withoutAuthorization(() => get.execute("hiddenLegacy"));
++        expect(hidden.isOk()).toBe(true);
++    });
++
++    it("preserves denial for anonymous reads before and after system reads", async () => {
++        const get = container.resolve(GetModelUseCase);
++        const list = container.resolve(ListModelsUseCase);
++        const identity = container.resolve(IdentityContext);
++        container.resolve(TestPermissions).list = [];
++        identity.setIdentity(undefined);
++
++        const deniedGet = await get.execute("hiddenBuilder");
++        expect(deniedGet.isFail()).toBe(true);
++        expect(deniedGet.error.code).toBe("Cms/Model/NotFound");
++
++        const all = await identity.withoutAuthorization(() => list.execute());
++        expect(all.isOk()).toBe(true);
++        expect(all.value.map(model => model.modelId)).toEqual(
++            expect.arrayContaining(["hiddenLegacy", "hiddenBuilder"])
++        );
++
++        const deniedList = await list.execute();
++        expect(deniedList.isFail()).toBe(true);
++        expect(deniedList.error.code).toBe("Cms/Model/NotAuthorized");
++        const deniedAgain = await get.execute("hiddenBuilder");
++        expect(deniedAgain.isFail()).toBe(true);
++        expect(deniedAgain.error.code).toBe("Cms/Model/NotFound");
++    });
++
++    it("keeps code models scoped to the current tenant after a restricted read", async () => {
++        const list = container.resolve(ListModelsUseCase);
++        const identity = container.resolve(IdentityContext);
++        const tenancy = container.resolve(TenantContext);
++
++        await list.execute();
++        const other = await tenancy.withTenant(otherTenant, () => {
++            return identity.withoutAuthorization(() => list.execute());
++        });
++        expect(other.isOk()).toBe(true);
++        expect(other.value.map(model => model.modelId)).toContain("otherTenantModel");
++
++        const root = await identity.withoutAuthorization(() => list.execute());
++        expect(root.value.map(model => model.modelId)).not.toContain("otherTenantModel");
++    });
++});
+diff --git a/packages/api-headless-cms/src/features/contentModel/GetModel/GetModelUseCase.ts b/packages/api-headless-cms/src/features/contentModel/GetModel/GetModelUseCase.ts
+index d38566a9..cfbf74a5 100644
+--- a/packages/api-headless-cms/src/features/contentModel/GetModel/GetModelUseCase.ts
++++ b/packages/api-headless-cms/src/features/contentModel/GetModel/GetModelUseCase.ts
+@@ -10,7 +10,7 @@ import { ModelNotAuthorizedError } from "~/domain/contentModel/errors.js";
+  *
+  * Responsibilities:
+  * - Apply initial access control check
+- * - Delegate to repository (which uses ModelCache for plugin + DB models)
++ * - Delegate to repository for plugin and database models
+  * - Apply model-specific access control check
+  * - Return the model or appropriate error
+  */
+diff --git a/packages/api-headless-cms/src/features/contentModel/ListModels/ListModelsUseCase.ts b/packages/api-headless-cms/src/features/contentModel/ListModels/ListModelsUseCase.ts
+index c66e5cc8..60bdc0f3 100644
+--- a/packages/api-headless-cms/src/features/contentModel/ListModels/ListModelsUseCase.ts
++++ b/packages/api-headless-cms/src/features/contentModel/ListModels/ListModelsUseCase.ts
+@@ -12,7 +12,7 @@ import { filterAsync } from "~/utils/filterAsync.js";
+  *
+  * Responsibilities:
+  * - Apply initial access control check
+- * - Delegate to repository (which uses ModelCache for plugin + DB models)
++ * - Delegate to repository for plugin and database models
+  * - Return all accessible models
+  */
+ class ListModelsUseCaseImpl implements UseCaseAbstraction.Interface {
+@@ -30,8 +30,7 @@ class ListModelsUseCaseImpl implements UseCaseAbstraction.Interface {
+             return Result.fail(new ModelNotAuthorizedError());
+         }
+ 
+-        // Repository uses ModelCache to fetch all models
+-        // ModelCache handles merging plugin + database models and access control
++        // The repository fetches plugin and database models.
+         const result = await this.repository.execute(params);
+ 
+         if (result.isFail()) {
+diff --git a/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts b/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
+index 5c4312ca..84f159f5 100644
+--- a/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
++++ b/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
+@@ -12,15 +12,6 @@ import { ensureTypeTag } from "~/domain/contentModel/ensureTypeTag.js";
+ import type { CmsModel } from "~/types/index.js";
+ import { ModelFieldCompression } from "~/features/contentModel/ModelFieldCompression/index.js";
+ 
+-/**
+- * ModelsFetcherImpl - Implementation with multi-level caching.
+- *
+- * Caching strategy:
+- * 1. Plugin models are cached per tenant (with access control applied by PluginModelsProvider)
+- * 2. Database models are cached per tenant (raw from DB)
+- * 3. Filtered database models are cached per tenant + identity (with access control applied)
+- * 4. Final merged list is cached per tenant + identity
+- */
+ class ModelsFetcherImpl implements FetcherAbstraction.Interface {
+     public constructor(
+         private readonly modelCache: ModelCache.Interface,
+@@ -34,22 +25,11 @@ class ModelsFetcherImpl implements FetcherAbstraction.Interface {
+         try {
+             const tenant = this.tenantContext.getTenant();
+ 
+-            // Create a cache key based on tenant + identity
+-            const cacheKey = createCacheKey({
+-                tenant: tenant.id
+-            });
++            // Plugin models are permission-filtered and must not be cached across authorization contexts.
++            const pluginModels = await this.pluginModelsProvider.list(tenant.id);
++            const databaseModels = await this.fetchAndMergeModels(tenant.id);
+ 
+-            // Try to get from cache first
+-            const cached = await this.modelCache.getOrSet(cacheKey, async () => {
+-                // Fetch plugin models (with caching and access control)
+-                const pluginModels = await this.pluginModelsProvider.list(tenant.id);
+-
+-                const databaseModels = await this.fetchAndMergeModels(tenant.id);
+-
+-                return [...pluginModels, ...databaseModels];
+-            });
+-
+-            return Result.ok(cached);
++            return Result.ok([...pluginModels, ...databaseModels]);
+         } catch (error) {
+             return Result.fail(new ModelPersistenceError(error as Error));
+         }
+diff --git a/packages/api-headless-cms/src/features/contentModel/shared/abstractions.ts b/packages/api-headless-cms/src/features/contentModel/shared/abstractions.ts
+index a9e2f715..34629a4e 100644
+--- a/packages/api-headless-cms/src/features/contentModel/shared/abstractions.ts
++++ b/packages/api-headless-cms/src/features/contentModel/shared/abstractions.ts
+@@ -38,19 +38,17 @@ export namespace ModelCache {
+ /**
+  * ModelsFetcher - Centralized model fetching with caching.
+  *
+- * This abstraction handles fetching models from both plugins and database,
+- * applies access control filtering, and caches the results for optimal performance.
++ * Fetches permission-filtered plugin models and tenant-cached database models.
+  */
+ export interface IModelsFetcher {
+     /**
+-     * Fetch all accessible models for the current tenant and identity.
+-     * Results are cached based on tenant + identity.
++     * Fetch models for the current tenant, applying access control to plugin models.
+      */
+     fetchAll(): Promise<Result<CmsModel[], ModelsFetcherError>>;
+ 
+     /**
+      * Fetch a single model by modelId.
+-     * Uses the cached fetchAll result.
++     * Uses fetchAll.
+      */
+     fetchById(modelId: string): Promise<Result<CmsModel, ModelsFetcherError>>;
+ }

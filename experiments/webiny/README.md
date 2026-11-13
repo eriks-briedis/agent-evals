@@ -1,6 +1,6 @@
 # Experiment: Copilot CLI vs Claude Code on real Webiny bug fixes
 
-By Eriks Briedis, November 2026. 84 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with the runner in [`harness/`](harness/README.md). Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/). What the grader recorded: [`grading/`](grading/README.md).
+By Eriks Briedis, November 2026. 108 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with the runner in [`harness/`](harness/README.md). Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/). What the grader recorded: [`grading/`](grading/README.md).
 
 ![Copilot CLI and Claude Code on the same model](same-model-tie.png)
 
@@ -14,7 +14,7 @@ Copilot CLI often spends far more effort than a task needs. Is that the harness 
 - **Grading:** the tests from the real fix are hidden from the agent and run afterwards. A session passes when those tests pass and the change stays within size limits relative to the real fix. Tasks, hidden tests and limits are in [`harness/`](harness/README.md).
 - **Size:** source lines the agent changed divided by the lines in the real fix. Tests and markdown are not counted.
 - **Context:** all agent instruction files (`AGENTS.md`, `CLAUDE.md`, skills, MCP config, `ai-context/`) were removed from the repo, except in the wiki rows.
-- **Runs:** non-interactive, one session per attempt, three attempts per task. The wiki rows have one attempt per task.
+- **Runs:** non-interactive, one session per attempt, three attempts per task.
 - **Versions:** GitHub Copilot CLI 1.0.109, Claude Code 2.1.322.
 
 ## Results without a wiki
@@ -43,24 +43,25 @@ In row C, Auto picked `gpt-6.1-terra` in 12 sessions, `gpt-6-luna` in 4 and `cla
 
 ## Results with a wiki
 
-Each workspace got a `wiki/` folder holding Webiny's own markdown docs from that commit (about 300 pages, 4 MB) and an [`AGENTS.md`](wiki-AGENTS.md) telling the agent to read the relevant pages before changing code. Tickets were unchanged. Six sessions per wiki row.
+Each workspace got a `wiki/` folder holding Webiny's own markdown docs from that commit (about 300 pages, 4 MB) and an [`AGENTS.md`](wiki-AGENTS.md) telling the agent to read the relevant pages before changing code. Tickets were unchanged. 18 sessions per row. Attempt 1 of each wiki row was run and published first; attempts 2 and 3 were added afterwards and moved the numbers, mostly down.
 
 | Row | Model | Wiki | Pass | Tool calls | Seconds | Size vs real fix | Credits per session | Wiki pages opened |
 |---|---|---|---|---|---|---|---|---|
 | C | Auto | no | 17/18 | 62 | 175 | 0.81× | 7.2 | n/a |
-| E | Auto | yes | 6/6 | 113.5 | 430 | 1.07× | 21.1 | 5.5 (75 KB) |
+| E | Auto | yes | 17/18 | 83 | 198 | 0.94× | 14.0 | 6 (67 KB) |
 | B | Sonnet 5.5 | no | 18/18 | 10 | 39 | 0.73× | 10.1 | n/a |
-| F | Sonnet 5.5 | yes | 6/6 | 12.5 | 65 | 0.68× | 17.4 | 2.5 (17 KB) |
+| F | Sonnet 5.5 | yes | 17/18 | 12 | 67.5 | 0.72× | 14.4 | 2 (16.5 KB) |
 
-In row E, Auto picked `gpt-6.1-terra` in 4 sessions and `gpt-6-luna` in 2.
+In row E, Auto picked `gpt-6.1-terra` in 14 sessions and `gpt-6-luna` in 4. It never picked Sonnet, which it did twice in row C.
 
 ![Results with a wiki](wiki-effect.png)
 
 ### What it shows
 
-- **Auto with a wiki:** about 1.8× the tool calls, 2.5× the time and 2.9× the credits. Changes were somewhat larger.
-- **Sonnet with a wiki:** behaviour barely changed, but credits rose about 70%.
-- **Instructions:** all 12 sessions followed the instruction file's rule about the final message and none committed, as the ticket required. Nothing here shows the agent following its prompt less.
+- **Auto with a wiki:** about 1.9× the credits and 1.3× the tool calls. Time rose only 1.1× and changes were somewhat larger.
+- **Sonnet with a wiki:** tool calls and change size barely moved, but credits rose about 43% and sessions took 1.7× as long (67.5 s against 39 s).
+- **Pass rate:** no gain. Each wiki row has one failure, both on `audit-logs`: a row E fix that was correct but 5.3× the size of the real one (limit 5×), and a row F fix that was wrong.
+- **Instructions:** all 36 sessions followed the instruction file's rule about the final message and none committed, as the ticket required. Nothing here shows the agent following its prompt less.
 
 ## Per task
 
@@ -68,12 +69,12 @@ Pass count, then median tool calls.
 
 | Task | A: Claude Code, Sonnet | B: Copilot, Sonnet | C: Copilot, Auto | D: Claude Code, Opus | E: Copilot, Auto, wiki | F: Copilot, Sonnet, wiki |
 |---|---|---|---|---|---|---|
-| audit-logs | 3/3, 9 | 3/3, 10 | 2/3, 116 | 3/3, 20 | 1/1, 170 | 1/1, 13 |
-| os-registries | 3/3, 13 | 3/3, 15 | 3/3, 47 | 3/3, 16 | 1/1, 72 | 1/1, 15 |
-| flp-logging | 3/3, 7 | 3/3, 9 | 3/3, 54 | 3/3, 21 | 1/1, 77 | 1/1, 7 |
-| model-cache | 3/3, 17 | 3/3, 11 | 3/3, 83 | 3/3, 33 | 1/1, 202 | 1/1, 26 |
-| sql-leak | 3/3, 5 | 3/3, 10 | 3/3, 77 | 3/3, 21 | 1/1, 130 | 1/1, 12 |
-| tenant-leak | 3/3, 6 | 3/3, 5 | 3/3, 43 | 3/3, 22 | 1/1, 97 | 1/1, 10 |
+| audit-logs | 3/3, 9 | 3/3, 10 | 2/3, 116 | 3/3, 20 | 2/3, 115 | 2/3, 13 |
+| os-registries | 3/3, 13 | 3/3, 15 | 3/3, 47 | 3/3, 16 | 3/3, 79 | 3/3, 14 |
+| flp-logging | 3/3, 7 | 3/3, 9 | 3/3, 54 | 3/3, 21 | 3/3, 77 | 3/3, 7 |
+| model-cache | 3/3, 17 | 3/3, 11 | 3/3, 83 | 3/3, 33 | 3/3, 114 | 3/3, 16 |
+| sql-leak | 3/3, 5 | 3/3, 10 | 3/3, 77 | 3/3, 21 | 3/3, 69 | 3/3, 12 |
+| tenant-leak | 3/3, 6 | 3/3, 5 | 3/3, 43 | 3/3, 22 | 3/3, 65 | 3/3, 9 |
 
 ![Tool calls per task](per-task.png)
 
@@ -81,8 +82,8 @@ The images are generated from `sessions.csv` by [`make-images.mjs`](make-images.
 
 ## Limits
 
-- **Ceiling:** every row passes 17 or 18 of 18 (6 of 6 in the wiki rows), so pass rate separates nothing. The differences are in effort, size and cost.
-- **Sample:** three attempts per task, one for the wiki rows. Only large differences mean anything.
+- **Ceiling:** every row passes 17 or 18 of 18, so pass rate separates nothing. The differences are in effort, size and cost.
+- **Sample:** three attempts per task. Only large differences mean anything. The wiki rows show why: their first attempt alone gave 2.5× the time for Auto, all three give 1.1×.
 - **Tickets:** written for this experiment from the PR descriptions. They are more precise than most real tickets, and some name the affected class or package.
 - **Reference fixes:** the real Webiny fixes were written with Claude Code, which may favour Claude models on similarity to the reference.
 - **Re-grading:** one Claude Code session was first marked failed because the test database port was busy during grading. It passed when re-graded from its saved patch.

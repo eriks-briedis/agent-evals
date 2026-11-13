@@ -1,0 +1,76 @@
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..59fee8f2 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -10,6 +10,7 @@ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+     private readonly verified = new Set<string>();
++    private readonly pending = new Map<string, Promise<void>>();
+ 
+     constructor(knex: Knex, prefix: string = "") {
+         this.knex = knex;
+@@ -38,10 +39,29 @@ export class TableManager implements ITableManager {
+             return;
+         }
+ 
+-        const exists = await this.knex.schema.hasTable(resolved);
++        let promise = this.pending.get(resolved);
++        if (!promise) {
++            promise = this.create(resolved, creator).finally(() => {
++                this.pending.delete(resolved);
++            });
++            this.pending.set(resolved, promise);
++        }
++        await promise;
++    }
+ 
+-        if (!exists) {
+-            await this.knex.schema.createTable(resolved, creator);
++    private async create(
++        resolved: string,
++        creator: (table: Knex.CreateTableBuilder) => void
++    ): Promise<void> {
++        if (!(await this.knex.schema.hasTable(resolved))) {
++            try {
++                await this.knex.schema.createTable(resolved, creator);
++            } catch (error) {
++                // Another manager may have created the table between the check and the create.
++                if (!(await this.knex.schema.hasTable(resolved))) {
++                    throw error;
++                }
++            }
+         }
+ 
+         this.verified.add(resolved);
+diff --git a/packages/api-core-sql/src/createApiCoreSql.ts b/packages/api-core-sql/src/createApiCoreSql.ts
+index 982c0221..0b988d51 100644
+--- a/packages/api-core-sql/src/createApiCoreSql.ts
++++ b/packages/api-core-sql/src/createApiCoreSql.ts
+@@ -13,7 +13,25 @@ interface CreateApiCoreSqlParams {
+     tableNamePrefix?: string;
+ }
+ 
+-export const createApiCoreSql = ({
++const cache = new WeakMap<Knex, Map<string, ApiCoreStorageOperations>>();
++
++export const createApiCoreSql = (params: CreateApiCoreSqlParams): ApiCoreStorageOperations => {
++    const { knex } = params;
++    const prefix = params.tableNamePrefix ?? "";
++    let byPrefix = cache.get(knex);
++    if (!byPrefix) {
++        byPrefix = new Map();
++        cache.set(knex, byPrefix);
++    }
++    let operations = byPrefix.get(prefix);
++    if (!operations) {
++        operations = buildApiCoreSql(params);
++        byPrefix.set(prefix, operations);
++    }
++    return operations;
++};
++
++const buildApiCoreSql = ({
+     knex,
+     tableNamePrefix
+ }: CreateApiCoreSqlParams): ApiCoreStorageOperations => {

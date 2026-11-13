@@ -66,20 +66,20 @@ const images = {
     <tr><td>Claude Code<small>Opus 5.5</small></td><td>${S.D.pass}</td><td>${S.D.tools}</td><td>${S.D.seconds}</td><td>${S.D.size}</td><td>${S.D.usd}</td></tr></table>`,
     `Medians per session, 18 sessions per row. Copilot on Auto: ${x(S.C.tools, S.B.tools)} the tool calls and ${x(S.C.seconds, S.B.seconds)} the time of Copilot on Sonnet.<br>Copilot CLI 1.0.109, Claude Code 2.1.322. Claude cost is the API-equivalent figure.`),
   'wiki-effect': page(
-    'A 300-page wiki in the repo: same pass rate, far more time and credits.',
+    'A 300-page wiki in the repo: no better pass rate, more credits.',
     'Same six bug fixes. The repo’s own docs added as wiki/ with instructions to read the relevant pages first.',
     `<table><tr><th>Copilot CLI</th><th>Passed</th><th>Tool calls</th><th>Seconds</th><th>Size vs real fix</th><th>Credits per session</th><th>Wiki pages opened</th></tr>
     <tr><td>Auto<small>no wiki</small></td><td>${S.C.pass}</td><td>${S.C.tools}</td><td>${S.C.seconds}</td><td>${S.C.size}</td><td>${S.C.credits}</td><td>–</td></tr>
-    <tr><td>Auto<small>with wiki</small></td><td>${S.E.pass}</td><td class="hi">${S.E.tools}</td><td class="hi">${S.E.seconds}</td><td>${S.E.size}</td><td class="hi">${S.E.credits}</td><td>${S.E.pages}</td></tr>
+    <tr><td>Auto<small>with wiki</small></td><td>${S.E.pass}</td><td>${S.E.tools}</td><td>${S.E.seconds}</td><td>${S.E.size}</td><td class="hi">${S.E.credits}</td><td>${S.E.pages}</td></tr>
     <tr><td>Sonnet 5.5<small>no wiki</small></td><td>${S.B.pass}</td><td>${S.B.tools}</td><td>${S.B.seconds}</td><td>${S.B.size}</td><td>${S.B.credits}</td><td>–</td></tr>
     <tr><td>Sonnet 5.5<small>with wiki</small></td><td>${S.F.pass}</td><td>${S.F.tools}</td><td>${S.F.seconds}</td><td>${S.F.size}</td><td class="hi">${S.F.credits}</td><td>${S.F.pages}</td></tr></table>`,
-    `Medians per session. Wiki rows: one attempt per task, so treat them as a first look.<br>With the wiki, Auto used ${x(S.E.credits, S.C.credits)} the credits and ${x(S.E.seconds, S.C.seconds)} the time. Sonnet behaved the same but cost ${x(S.F.credits, S.B.credits)}.`),
+    `Medians per session, 18 sessions per row. Credits are the mean per session.<br>With the wiki, Auto used ${x(S.E.credits, S.C.credits)} the credits and ${x(S.E.tools, S.C.tools)} the tool calls. Sonnet made the same changes but cost ${x(S.F.credits, S.B.credits)}.`),
   'per-task': page(
     'Tool calls per task: the gap is the same on every bug.',
     'Median tool calls per session. All setups solved every task at least once.',
     `<table><tr><th>Task</th><th>Claude Code<br>Sonnet</th><th>Copilot<br>Sonnet</th><th>Copilot<br>Auto</th><th>Claude Code<br>Opus</th><th>Copilot Auto<br>+ wiki</th><th>Copilot Sonnet<br>+ wiki</th></tr>
     ${['audit-logs', 'os-registries', 'flp-logging', 'model-cache', 'sql-leak', 'tenant-leak'].map((t) => `<tr><td>${t}</td>${['A', 'B', 'C', 'D', 'E', 'F'].map((k) => `<td${k === 'C' || k === 'E' ? ' class="hi"' : ''}>${median(of(k).filter((s) => s.task === `webiny-${t}`).map((s) => s.tool_calls))}</td>`).join('')}</tr>`).join('')}</table>`,
-    'Tasks are merged bug-fix PRs in webiny/webiny-js. Three attempts per task; one for the wiki columns.'),
+    'Tasks are merged bug-fix PRs in webiny/webiny-js. Three attempts per task.'),
 };
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-evals-img-'));

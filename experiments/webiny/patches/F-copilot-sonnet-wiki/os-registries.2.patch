@@ -1,0 +1,106 @@
+diff --git a/packages/api-opensearch/__tests__/registries.test.ts b/packages/api-opensearch/__tests__/registries.test.ts
+new file mode 100644
+index 00000000..951b0599
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registries.test.ts
+@@ -0,0 +1,54 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++import { OpenSearchIndexFeature } from "~/features/OpenSearchIndex/feature.js";
++import { OpenSearchIndexRegistry } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.js";
++import { OpenSearchIndex } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndex.js";
++
++class CustomOperator implements OpenSearchQueryBuilderOperator.Interface {
++    public getOperator() {
++        return "custom";
++    }
++    public apply() {}
++}
++const CustomOperatorImpl = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: CustomOperator,
++    dependencies: []
++});
++
++class CustomIndex implements OpenSearchIndex.Interface {
++    public readonly body = {};
++    public canUse() {
++        return true;
++    }
++}
++const CustomIndexImpl = OpenSearchIndex.createImplementation({
++    implementation: CustomIndex,
++    dependencies: []
++});
++
++describe("per-request registries", () => {
++    it("should isolate request-registered operators and indexes", () => {
++        const root = new Container();
++        OpenSearchQueryBuilderOperatorFeature.register(root);
++        OpenSearchIndexFeature.register(root);
++
++        const a = root.createChildContainer();
++        a.register(CustomOperatorImpl);
++        a.register(CustomIndexImpl);
++        const b = root.createChildContainer();
++
++        const opsA = a.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        expect(opsA.get("custom")).toBeDefined();
++        expect(opsA.get("eq")).toBeDefined();
++        expect(b.resolve(OpenSearchQueryBuilderOperatorRegistry).get("custom")).toBeUndefined();
++        expect(b.resolve(OpenSearchQueryBuilderOperatorRegistry).get("eq")).toBeDefined();
++        expect(root.resolve(OpenSearchQueryBuilderOperatorRegistry).get("custom")).toBeUndefined();
++
++        expect(a.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(1);
++        expect(b.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(0);
++        expect(root.resolve(OpenSearchIndexRegistry).getAll()).toHaveLength(0);
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..0cb69234 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -34,6 +34,6 @@ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+         container.register(NotIn).inSingletonScope();
+         container.register(StartsWith).inSingletonScope();
+         container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });
+diff --git a/wiki/ai-context/core-features-reference.md b/wiki/ai-context/core-features-reference.md
+index b768c476..f0c4fbf5 100644
+--- a/wiki/ai-context/core-features-reference.md
++++ b/wiki/ai-context/core-features-reference.md
+@@ -625,7 +625,7 @@ Injectable factories that transform raw input into domain `CmsEntry` objects. Li
+ 
+ - **Import:** `import { OpenSearchQueryBuilderOperatorRegistry } from "@webiny/api-opensearch/exports/api/opensearch.js"`
+ - **Interface Type:** See `packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.ts`
+-- **Usage:** Registry that collects all `OpenSearchQueryBuilderOperator` implementations via `{ multiple: true }` DI. Provides `get(operatorName)` and `getAll()`. Registered as singleton by `OpenSearchQueryBuilderOperatorFeature`.
++- **Usage:** Registry that collects all `OpenSearchQueryBuilderOperator` implementations via `{ multiple: true }` DI. Provides `get(operatorName)` and `getAll()`. Registered in container scope (one instance per request container, so request-registered operators are seen) by `OpenSearchQueryBuilderOperatorFeature`.
+ 
+ ### OpenSearchField
+ 
+@@ -654,7 +654,7 @@ Injectable factories that transform raw input into domain `CmsEntry` objects. Li
+ 
+ - **Import:** `import { OpenSearchIndexRegistry } from "@webiny/api-opensearch/exports/api/opensearch.js"`
+ - **Interface Type:** See `packages/api-opensearch/src/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.ts`
+-- **Usage:** Registry that collects all `OpenSearchIndex` implementations via `{ multiple: true }` DI. Provides `getLastAdded()` (returns the last registered usable index) and `getAll()`. Registered as singleton by `OpenSearchIndexFeature`.
++- **Usage:** Registry that collects all `OpenSearchIndex` implementations via `{ multiple: true }` DI. Provides `getLastAdded()` (returns the last registered usable index) and `getAll()`. Registered in container scope (one instance per request container) by `OpenSearchIndexFeature`.
+ 
+ ### AwsOpenSearchClientFactoryFeature
+ 

@@ -1,0 +1,233 @@
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+index e390e8e6..cd6c398c 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+@@ -1,92 +1,77 @@
++import { AsyncLocalStorage } from "node:async_hooks";
+ import { createImplementation } from "@webiny/feature/api";
+ import { HandlerExecution } from "@webiny/event-handler-core";
+ import { TenantContext as Abstraction } from "./abstractions.js";
+ import type { Tenant } from "~/types/tenancy.js";
+ import { GetRootTenantUseCase } from "~/features/tenancy/GetRootTenant/index.js";
+-import { TenantIsDisabledError } from "./errors.js";
++import { TenantIsDisabledError, TenantSwitchInScopeError } from "./errors.js";
+ 
+ class TenantContextImpl implements Abstraction.Interface {
+-    private currentTenant: Tenant | null = null;
++  private currentTenant: Tenant | null = null;
++  private scope = new AsyncLocalStorage<Tenant>();
+ 
+-    constructor(
+-        private getRootTenant: GetRootTenantUseCase.Interface,
+-        private handlerExecution: HandlerExecution.Interface | undefined
+-    ) {}
++  constructor(
++    private getRootTenant: GetRootTenantUseCase.Interface,
++    private handlerExecution: HandlerExecution.Interface | undefined,
++  ) {}
+ 
+-    getTenant(): Tenant {
+-        this.handlerExecution?.assertCurrent("TenantContext");
+-        return this.currentTenant!;
+-    }
++  getTenant(): Tenant {
++    this.handlerExecution?.assertCurrent("TenantContext");
++    return this.scope.getStore() ?? this.currentTenant!;
++  }
+ 
+-    setTenant(tenant: Tenant): void {
+-        this.handlerExecution?.assertCurrent("TenantContext");
+-        if (tenant.isInstalled && tenant.status === "disabled") {
+-            throw new TenantIsDisabledError();
+-        }
+-        this.currentTenant = tenant;
++  setTenant(tenant: Tenant): void {
++    this.handlerExecution?.assertCurrent("TenantContext");
++    if (this.scope.getStore()) {
++      throw new TenantSwitchInScopeError();
+     }
++    this.assertEnabled(tenant);
++    this.currentTenant = tenant;
++  }
+ 
+-    /*
+-     * Puts back the tenant that was current before a `with*` call. That can be none at all: work
+-     * outside an HTTP request (a background task, a scheduled action) starts without a tenant.
+-     * Restoring is not switching, so it skips the checks `setTenant` makes.
+-     */
+-    private restoreTenant(tenant: Tenant | null): void {
+-        this.currentTenant = tenant;
++  private assertEnabled(tenant: Tenant): void {
++    if (tenant.isInstalled && tenant.status === "disabled") {
++      throw new TenantIsDisabledError();
+     }
++  }
+ 
+-    async withRootTenant<T>(cb: () => T): Promise<T> {
+-        const initialTenant = this.currentTenant;
+-        const rootTenant = await this.getRootTenant.execute();
+-        if (!rootTenant.isOk()) {
+-            return rootTenant.error as T;
+-        }
++  async withRootTenant<T>(cb: () => T): Promise<T> {
++    const rootTenant = await this.getRootTenant.execute();
++    if (!rootTenant.isOk()) {
++      return rootTenant.error as T;
++    }
+ 
+-        const tenant = rootTenant.value;
++    return this.runScoped(rootTenant.value, async () => cb());
++  }
+ 
+-        this.setTenant(tenant);
+-        try {
+-            return await cb();
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
++  async withEachTenant<TReturn>(
++    tenants: Tenant[],
++    cb: (tenant: Tenant) => Promise<TReturn>,
++  ): Promise<TReturn[]> {
++    const results = [];
++    for (const tenant of tenants) {
++      results.push(await this.runScoped(tenant, () => cb(tenant)));
+     }
++    return results;
++  }
+ 
+-    async withEachTenant<TReturn>(
+-        tenants: Tenant[],
+-        cb: (tenant: Tenant) => Promise<TReturn>
+-    ): Promise<TReturn[]> {
+-        const initialTenant = this.currentTenant;
+-        const results = [];
+-        for (const tenant of tenants) {
+-            this.setTenant(tenant);
+-            try {
+-                results.push(await cb(tenant));
+-            } finally {
+-                this.restoreTenant(initialTenant);
+-            }
+-        }
+-        return results;
+-    }
++  async withTenant<TReturn>(
++    tenant: Tenant,
++    cb: (tenant: Tenant) => Promise<TReturn>,
++  ): Promise<TReturn> {
++    return this.runScoped(tenant, () => cb(tenant));
++  }
+ 
+-    async withTenant<TReturn>(
+-        tenant: Tenant,
+-        cb: (tenant: Tenant) => Promise<TReturn>
+-    ): Promise<TReturn> {
+-        const initialTenant = this.currentTenant;
+-        this.setTenant(tenant);
+-        try {
+-            return await cb(tenant);
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
+-    }
++  // The switched tenant lives in async-local storage, so only code running inside the callback sees it.
++  private runScoped<T>(tenant: Tenant, cb: () => Promise<T>): Promise<T> {
++    this.handlerExecution?.assertCurrent("TenantContext");
++    this.assertEnabled(tenant);
++    return this.scope.run(tenant, cb);
++  }
+ }
+ 
+ export const TenantContext = createImplementation({
+-    abstraction: Abstraction,
+-    implementation: TenantContextImpl,
+-    dependencies: [GetRootTenantUseCase, [HandlerExecution, { optional: true }]]
++  abstraction: Abstraction,
++  implementation: TenantContextImpl,
++  dependencies: [GetRootTenantUseCase, [HandlerExecution, { optional: true }]],
+ });
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/abstractions.ts b/packages/api-core/src/features/tenancy/TenantContext/abstractions.ts
+index e170e695..aba0296e 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/abstractions.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/abstractions.ts
+@@ -2,19 +2,22 @@ import { createAbstraction } from "@webiny/feature/api";
+ import type { Tenant } from "~/types/tenancy.js";
+ 
+ export interface ITenantContext {
+-    setTenant(tenant: Tenant): void;
+-    getTenant(): Tenant;
+-    withRootTenant<T>(cb: () => T): Promise<T>;
+-    withEachTenant<TReturn>(
+-        tenants: Tenant[],
+-        cb: (tenant: Tenant) => Promise<TReturn>
+-    ): Promise<TReturn[]>;
+-    withTenant<TReturn>(tenant: Tenant, cb: (tenant: Tenant) => Promise<TReturn>): Promise<TReturn>;
++  setTenant(tenant: Tenant): void;
++  getTenant(): Tenant;
++  withRootTenant<T>(cb: () => T): Promise<T>;
++  withEachTenant<TReturn>(
++    tenants: Tenant[],
++    cb: (tenant: Tenant) => Promise<TReturn>,
++  ): Promise<TReturn[]>;
++  withTenant<TReturn>(
++    tenant: Tenant,
++    cb: (tenant: Tenant) => Promise<TReturn>,
++  ): Promise<TReturn>;
+ }
+ 
+ /** Provides access to the current tenant and tenant-scoped execution. */
+ export const TenantContext = createAbstraction<ITenantContext>("TenantContext");
+ 
+ export namespace TenantContext {
+-    export type Interface = ITenantContext;
++  export type Interface = ITenantContext;
+ }
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/errors.ts b/packages/api-core/src/features/tenancy/TenantContext/errors.ts
+index 238f2ff8..519d098b 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/errors.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/errors.ts
+@@ -1,9 +1,20 @@
+ import { BaseError } from "@webiny/feature/api";
+ 
+ export class TenantIsDisabledError extends BaseError {
+-    override readonly code = "Tenancy/TenantDisabled" as const;
++  override readonly code = "Tenancy/TenantDisabled" as const;
+ 
+-    constructor() {
+-        super({ message: "Tenant is disabled!" });
+-    }
++  constructor() {
++    super({ message: "Tenant is disabled!" });
++  }
++}
++
++export class TenantSwitchInScopeError extends BaseError {
++  override readonly code = "Tenancy/TenantSwitchInScope" as const;
++
++  constructor() {
++    super({
++      message:
++        "Cannot call setTenant() inside a withTenant(), withRootTenant() or withEachTenant() callback.",
++    });
++  }
+ }
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/feature.ts b/packages/api-core/src/features/tenancy/TenantContext/feature.ts
+index 12cd1d3b..b61634d0 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/feature.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/feature.ts
+@@ -2,8 +2,8 @@ import { createFeature } from "@webiny/feature/api";
+ import { TenantContext } from "./TenantContext.js";
+ 
+ export const TenantContextFeature = createFeature({
+-    name: "TenantContextFeature",
+-    register(container) {
+-        container.register(TenantContext).inSingletonScope();
+-    }
++  name: "TenantContextFeature",
++  register(container) {
++    container.register(TenantContext).inSingletonScope();
++  },
+ });

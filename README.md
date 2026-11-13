@@ -119,7 +119,7 @@ Each session also saves its event log, patch, test output and final message unde
 
 ## Example results
 
-[Copilot CLI vs Claude Code on six real Webiny bug fixes](experiments/webiny/README.md): 84 sessions comparing harness, model choice and a large wiki.
+[Copilot CLI vs Claude Code on six real Webiny bug fixes](experiments/webiny/README.md): 108 sessions comparing harness, model choice and a large wiki.
 
 ## Author
 

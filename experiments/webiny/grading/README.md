@@ -1,6 +1,6 @@
 # Grading results
 
-What the grader recorded for each of the 84 sessions. Folder = row in the write-up. How grading works: [`../harness/README.md`](../harness/README.md).
+What the grader recorded for each of the 108 sessions. Folder = row in the write-up. How grading works: [`../harness/README.md`](../harness/README.md).
 
 | File | What it is |
 |---|---|

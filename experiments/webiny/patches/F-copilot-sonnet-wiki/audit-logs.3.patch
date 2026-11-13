@@ -1,0 +1,25 @@
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..d25de5e0 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -28,8 +28,6 @@ export const AuditLogsFeature = createFeature({
+ 
+         container.register(AuditLogsGraphQLSchema);
+ 
+-        let initialized = false;
+-
+         const STUB_SCHEMA: GraphQLSchema = makeExecutableSchema({
+             typeDefs: "type Query\ntype Mutation",
+             assumeValidSDL: true
+@@ -37,11 +35,6 @@ export const AuditLogsFeature = createFeature({
+ 
+         container.registerInstance(GraphQLContextualSchema, {
+             async build(ctx: Record<string, any>): Promise<GraphQLSchema> {
+-                if (initialized) {
+-                    return STUB_SCHEMA;
+-                }
+-                initialized = true;
+-
+                 const storage = container.resolve(AuditLogsStorage);
+                 const eventPublisher = container.resolve(EventPublisher);
+ 

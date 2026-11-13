@@ -1,0 +1,277 @@
+diff --git a/packages/api-aco/__tests__/flp.trigger-logging.test.ts b/packages/api-aco/__tests__/flp.trigger-logging.test.ts
+new file mode 100644
+index 00000000..dc4142df
+--- /dev/null
++++ b/packages/api-aco/__tests__/flp.trigger-logging.test.ts
+@@ -0,0 +1,118 @@
++import { describe } from "vitest";
++import { it } from "vitest";
++import { expect } from "vitest";
++import { vi } from "vitest";
++import { Result } from "@webiny/feature/api";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
++import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
++import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/index.js";
++import { useHandler } from "~tests/utils/useHandler";
++import { FolderPersistenceError } from "~/domain/folder/errors.js";
++import { CreateFolderUseCase } from "~/features/folder/CreateFolder/index.js";
++import { UpdateFolderUseCase } from "~/features/folder/UpdateFolder/index.js";
++import { DeleteFolderUseCase } from "~/features/folder/DeleteFolder/index.js";
++import { GetFolderRepository } from "~/features/folder/GetFolder/abstractions.js";
++import { CREATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { UPDATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { DELETE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++
++describe("FLP task trigger logging", () => {
++    const { handler } = useHandler();
++
++    it.each([
++        ["create", CREATE_FLP_TASK_ID],
++        ["update", UPDATE_FLP_TASK_ID],
++        ["delete", DELETE_FLP_TASK_ID]
++    ] as const)(
++        "%s logs trigger failures without failing the folder change",
++        async (operation, definition) => {
++            for (const failure of ["result", "throw"] as const) {
++                const context = await handler();
++                const container = context.container;
++                const createFolder = container.resolve(CreateFolderUseCase);
++                let folderId = "";
++
++                if (operation !== "create") {
++                    const seed = await createFolder.execute({
++                        title: "Seed",
++                        slug: `trigger-${operation}-${failure}`,
++                        type: "type",
++                        parentId: null
++                    });
++                    expect(seed.isOk()).toBe(true);
++                    folderId = seed.value.id;
++                }
++
++                const logger = container.resolve(Logger);
++                const logError = vi.spyOn(logger, "error").mockImplementation(() => {});
++                container.registerInstance(Logger, logger);
++                const tasks = container.resolve(TaskService);
++                const trigger = vi.spyOn(tasks, "trigger");
++                const error = new FolderPersistenceError(new Error("Trigger failed"));
++                if (failure === "result") {
++                    trigger.mockResolvedValue(Result.fail(error));
++                } else {
++                    trigger.mockRejectedValue(error);
++                }
++
++                if (operation === "create") {
++                    const result = await createFolder.execute({
++                        title: "Created",
++                        slug: `trigger-create-${failure}`,
++                        type: "type",
++                        parentId: null
++                    });
++                    expect(result.isOk()).toBe(true);
++                    folderId = result.value.id;
++                } else if (operation === "update") {
++                    const result = await container.resolve(UpdateFolderUseCase).execute(folderId, {
++                        title: "Updated"
++                    });
++                    expect(result.isOk()).toBe(true);
++                } else {
++                    const result = await container.resolve(DeleteFolderUseCase).execute(folderId);
++                    expect(result.isOk()).toBe(true);
++                }
++
++                const stored = await container.resolve(GetFolderRepository).execute(folderId);
++                if (operation === "delete") {
++                    expect(stored.isFail()).toBe(true);
++                } else {
++                    expect(stored.isOk()).toBe(true);
++                    expect(stored.value.title).toBe(operation === "create" ? "Created" : "Updated");
++                }
++
++                const input: { folder: { id: string }; notifyIdentityId?: string } = {
++                    folder: expect.objectContaining({ id: folderId })
++                };
++                if (operation !== "delete") {
++                    input.notifyIdentityId = container.resolve(IdentityContext).getIdentity()?.id;
++                }
++                expect(trigger).toHaveBeenCalledOnce();
++                expect(trigger).toHaveBeenCalledWith({ definition, input });
++                expect(logError).toHaveBeenCalledOnce();
++                expect(logError).toHaveBeenCalledWith(
++                    { err: error, folderId },
++                    `Failed to trigger ${operation} FLP task.`
++                );
++            }
++        }
++    );
++
++    it("does not log an error when the task is triggered successfully", async () => {
++        const context = await handler();
++        const logger = context.container.resolve(Logger);
++        const logError = vi.spyOn(logger, "error").mockImplementation(() => {});
++        context.container.registerInstance(Logger, logger);
++
++        const result = await context.container.resolve(CreateFolderUseCase).execute({
++            title: "Success",
++            slug: "trigger-success",
++            type: "type",
++            parentId: null
++        });
++
++        expect(result.isOk()).toBe(true);
++        expect(logError).not.toHaveBeenCalled();
++    });
++});
+diff --git a/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts b/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts
+index bae948e4..c7790190 100644
+--- a/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts
++++ b/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts
+@@ -4,6 +4,7 @@ import type { ICreateFlpTaskInput } from "~/types.js";
+ import { CREATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
+ import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
+ import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/abstractions.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ 
+ /*
+  * Folder reads report permissions from the FLP record, which the task writes later. So the task,
+@@ -12,25 +13,35 @@ import { IdentityContext } from "@webiny/api-core/features/security/IdentityCont
+ class CreateFlpOnFolderCreatedHandlerImpl implements FolderAfterCreateEventHandler.Interface {
+     constructor(
+         private identityContext: IdentityContext.Interface,
+-        private tasks: TaskService.Interface
++        private tasks: TaskService.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
+     async handle(event: FolderAfterCreateEvent): Promise<void> {
+         const { folder } = event.payload;
+ 
+         try {
+-            await this.tasks.trigger<ICreateFlpTaskInput>({
++            const result = await this.tasks.trigger<ICreateFlpTaskInput>({
+                 definition: CREATE_FLP_TASK_ID,
+                 // Nobody to tell when there is no identity, as in some system calls.
+                 input: { folder, notifyIdentityId: this.identityContext.getIdentity()?.id }
+             });
+-        } catch {
+-            // Ignore errors
++            if (result.isFail()) {
++                this.logger.error(
++                    { err: result.error, folderId: folder.id },
++                    "Failed to trigger create FLP task."
++                );
++            }
++        } catch (error) {
++            this.logger.error(
++                { err: error, folderId: folder.id },
++                "Failed to trigger create FLP task."
++            );
+         }
+     }
+ }
+ 
+ export const CreateFlpOnFolderCreatedHandler = FolderAfterCreateEventHandler.createImplementation({
+     implementation: CreateFlpOnFolderCreatedHandlerImpl,
+-    dependencies: [IdentityContext, TaskService]
++    dependencies: [IdentityContext, TaskService, Logger]
+ });
+diff --git a/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts b/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts
+index d9083ec1..b51c4d58 100644
+--- a/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts
++++ b/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts
+@@ -3,25 +3,38 @@ import type { FolderAfterDeleteEvent } from "~/features/folder/DeleteFolder/even
+ import type { IDeleteFlpTaskInput } from "~/types.js";
+ import { DELETE_FLP_TASK_ID } from "~/flp/tasks/index.js";
+ import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ 
+ class DeleteFlpOnFolderDeletedHandlerImpl implements FolderAfterDeleteEventHandler.Interface {
+-    constructor(private tasks: TaskService.Interface) {}
++    constructor(
++        private tasks: TaskService.Interface,
++        private logger: Logger.Interface
++    ) {}
+ 
+     async handle(event: FolderAfterDeleteEvent): Promise<void> {
+         const { folder } = event.payload;
+ 
+         try {
+-            await this.tasks.trigger<IDeleteFlpTaskInput>({
++            const result = await this.tasks.trigger<IDeleteFlpTaskInput>({
+                 definition: DELETE_FLP_TASK_ID,
+                 input: { folder }
+             });
+-        } catch {
+-            // Ignore errors
++            if (result.isFail()) {
++                this.logger.error(
++                    { err: result.error, folderId: folder.id },
++                    "Failed to trigger delete FLP task."
++                );
++            }
++        } catch (error) {
++            this.logger.error(
++                { err: error, folderId: folder.id },
++                "Failed to trigger delete FLP task."
++            );
+         }
+     }
+ }
+ 
+ export const DeleteFlpOnFolderDeletedHandler = FolderAfterDeleteEventHandler.createImplementation({
+     implementation: DeleteFlpOnFolderDeletedHandlerImpl,
+-    dependencies: [TaskService]
++    dependencies: [TaskService, Logger]
+ });
+diff --git a/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts b/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts
+index 1779cddf..cbd5b852 100644
+--- a/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts
++++ b/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts
+@@ -1,5 +1,6 @@
+ import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
+ import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/abstractions.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import type { FolderAfterUpdateEvent } from "~/features/folder/UpdateFolder/events.js";
+ import type { IUpdateFlpTaskInput } from "~/types.js";
+ import { UPDATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
+@@ -13,25 +14,35 @@ import { FolderAfterUpdateEventHandler } from "~/features/folder/UpdateFolder/in
+ class UpdateFlpOnFolderUpdatedHandlerImpl implements FolderAfterUpdateEventHandler.Interface {
+     constructor(
+         private identityContext: IdentityContext.Interface,
+-        private tasks: TaskService.Interface
++        private tasks: TaskService.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
+     async handle(event: FolderAfterUpdateEvent): Promise<void> {
+         const { folder } = event.payload;
+ 
+         try {
+-            await this.tasks.trigger<IUpdateFlpTaskInput>({
++            const result = await this.tasks.trigger<IUpdateFlpTaskInput>({
+                 definition: UPDATE_FLP_TASK_ID,
+                 // Nobody to tell when there is no identity, as in some system calls.
+                 input: { folder, notifyIdentityId: this.identityContext.getIdentity()?.id }
+             });
+-        } catch {
+-            // Ignore errors
++            if (result.isFail()) {
++                this.logger.error(
++                    { err: result.error, folderId: folder.id },
++                    "Failed to trigger update FLP task."
++                );
++            }
++        } catch (error) {
++            this.logger.error(
++                { err: error, folderId: folder.id },
++                "Failed to trigger update FLP task."
++            );
+         }
+     }
+ }
+ 
+ export const UpdateFlpOnFolderUpdatedHandler = FolderAfterUpdateEventHandler.createImplementation({
+     implementation: UpdateFlpOnFolderUpdatedHandlerImpl,
+-    dependencies: [IdentityContext, TaskService]
++    dependencies: [IdentityContext, TaskService, Logger]
+ });

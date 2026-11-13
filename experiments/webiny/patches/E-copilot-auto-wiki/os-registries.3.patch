@@ -1,0 +1,117 @@
+diff --git a/packages/api-opensearch/__tests__/registries/perRequest.test.ts b/packages/api-opensearch/__tests__/registries/perRequest.test.ts
+new file mode 100644
+index 00000000..b6a9156e
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registries/perRequest.test.ts
+@@ -0,0 +1,87 @@
++import { Container } from "@webiny/di";
++import { describe, expect, it } from "vitest";
++import { OpenSearchIndex } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndex.js";
++import { OpenSearchIndexRegistry } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.js";
++import { OpenSearchIndexFeature } from "~/features/OpenSearchIndex/feature.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++
++const builtInIndex: OpenSearchIndex.Interface = {
++    body: {
++        settings: {
++            index: {
++                number_of_shards: 1
++            }
++        }
++    },
++    canUse: () => true
++};
++
++const requestIndex: OpenSearchIndex.Interface = {
++    body: {
++        settings: {
++            index: {
++                number_of_shards: 2
++            }
++        }
++    },
++    canUse: () => true
++};
++
++class RequestOperatorImpl implements OpenSearchQueryBuilderOperator.Interface {
++    public getOperator(): string {
++        return "requestOnly";
++    }
++
++    public apply(): void {}
++}
++
++const RequestOperator = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: RequestOperatorImpl,
++    dependencies: []
++});
++
++describe("OpenSearch registries per container", () => {
++    it("includes request registrations only in their request registry", () => {
++        const root = new Container();
++        OpenSearchIndexFeature.register(root);
++        OpenSearchQueryBuilderOperatorFeature.register(root);
++        root.registerInstance(OpenSearchIndex, builtInIndex);
++
++        const rootIndexRegistry = root.resolve(OpenSearchIndexRegistry);
++        const rootOperatorRegistry = root.resolve(OpenSearchQueryBuilderOperatorRegistry);
++
++        const requestOne = root.createChildContainer();
++        requestOne.registerInstance(OpenSearchIndex, requestIndex);
++        requestOne.register(RequestOperator);
++
++        const requestTwo = root.createChildContainer();
++
++        const requestOneIndexRegistry = requestOne.resolve(OpenSearchIndexRegistry);
++        const requestOneOperatorRegistry = requestOne.resolve(
++            OpenSearchQueryBuilderOperatorRegistry
++        );
++        const requestTwoIndexRegistry = requestTwo.resolve(OpenSearchIndexRegistry);
++        const requestTwoOperatorRegistry = requestTwo.resolve(
++            OpenSearchQueryBuilderOperatorRegistry
++        );
++
++        expect(rootIndexRegistry).not.toBe(requestOneIndexRegistry);
++        expect(requestOneIndexRegistry).not.toBe(requestTwoIndexRegistry);
++        expect(rootIndexRegistry.getLastAdded().body.settings?.index?.number_of_shards).toBe(1);
++        expect(requestOneIndexRegistry.getLastAdded().body.settings?.index?.number_of_shards).toBe(
++            2
++        );
++        expect(requestTwoIndexRegistry.getLastAdded().body.settings?.index?.number_of_shards).toBe(
++            1
++        );
++
++        expect(rootOperatorRegistry.get("eq")).toBeDefined();
++        expect(requestOneOperatorRegistry.get("eq")).toBeDefined();
++        expect(requestTwoOperatorRegistry.get("eq")).toBeDefined();
++        expect(rootOperatorRegistry.get("requestOnly")).toBeUndefined();
++        expect(requestOneOperatorRegistry.get("requestOnly")).toBeDefined();
++        expect(requestTwoOperatorRegistry.get("requestOnly")).toBeUndefined();
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..0cb69234 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -34,6 +34,6 @@ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+         container.register(NotIn).inSingletonScope();
+         container.register(StartsWith).inSingletonScope();
+         container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });
