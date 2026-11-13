@@ -1,6 +1,6 @@
 # Experiment: Copilot CLI vs Claude Code on real Webiny bug fixes
 
-November 2026. 84 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with the harness in this repo's parent experiment. Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/).
+By Eriks Briedis, November 2026. 84 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with [`evals.mjs`](../../evals.mjs). Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/).
 
 ![Copilot CLI and Claude Code on the same model](same-model-tie.png)
 
