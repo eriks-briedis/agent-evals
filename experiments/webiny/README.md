@@ -2,6 +2,8 @@
 
 November 2026. 84 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with the harness in this repo's parent experiment. Per-session data: [`sessions.csv`](sessions.csv).
 
+![Copilot CLI and Claude Code on the same model](same-model-tie.png)
+
 ## Question
 
 Copilot CLI often spends far more effort than a task needs. Is that the harness (prompts, tools, subagents), the model, or the amount of documentation in the repo?
@@ -21,21 +23,23 @@ Medians per session, 18 sessions per row.
 
 | Row | Agent | Model | Pass | Tool calls | Seconds | Size vs real fix | Sessions touching extra files | Cost per session |
 |---|---|---|---|---|---|---|---|---|
-| A | Claude Code | Sonnet 5.5 | 17/18 | 8.5 | 62 | 0.76× | 5 | $0.13 |
+| A | Claude Code | Sonnet 5.5 | 18/18 | 8.5 | 62 | 0.76× | 5 | $0.13 |
 | B | Copilot CLI | Sonnet 5.5, pinned | 18/18 | 10 | 39 | 0.73× | 2 | 10.1 credits |
 | C | Copilot CLI | Auto | 17/18 | 62 | 175 | 0.81× | 10 | 7.2 credits |
-| D | Claude Code | Opus 5.5 | 18/18 | 21 | 186 | 1.16× | 10 | $0.66 |
+| D | Claude Code | Opus 5.5 | 18/18 | 21 | 186 | 1.17× | 10 | $0.66 |
 
 "Extra files" means source files changed that the real fix did not touch. Claude Code cost is the API-equivalent figure the CLI reports; Copilot cost is AI credits.
 
 In row C, Auto picked `gpt-6.1-terra` in 12 sessions, `gpt-6-luna` in 4 and `claude-sonnet-5.5` in 2.
+
+![Results without a wiki](harness-vs-model.png)
 
 ### What it shows
 
 - **Same model, different harness (A vs B):** no meaningful difference in pass rate, effort or change size.
 - **Same harness, Auto vs pinned Sonnet (C vs B):** about 6× the tool calls and 4.5× the time for the same pass rate, and five times as many sessions touching files outside the real fix.
 - **Bigger model (D vs A):** Opus took three times as long and wrote larger changes, with no gain in pass rate on these tasks.
-- **Failures:** row A's failure was a session whose fix did not pass the tests. Row C's was a correct fix 5.8× the size of the real one (limit 5×).
+- **The one failure:** a row C session whose fix was correct but 5.8× the size of the real one (limit 5×).
 
 ## Results with a wiki
 
@@ -44,11 +48,13 @@ Each workspace got a `wiki/` folder holding Webiny's own markdown docs from that
 | Row | Model | Wiki | Pass | Tool calls | Seconds | Size vs real fix | Credits per session | Wiki pages opened |
 |---|---|---|---|---|---|---|---|---|
 | C | Auto | no | 17/18 | 62 | 175 | 0.81× | 7.2 | n/a |
-| E | Auto | yes | 6/6 | 113.5 | 430 | 1.07× | 21.1 | 5 (75 KB) |
+| E | Auto | yes | 6/6 | 113.5 | 430 | 1.07× | 21.1 | 5.5 (75 KB) |
 | B | Sonnet 5.5 | no | 18/18 | 10 | 39 | 0.73× | 10.1 | n/a |
 | F | Sonnet 5.5 | yes | 6/6 | 12.5 | 65 | 0.68× | 17.4 | 2.5 (17 KB) |
 
 In row E, Auto picked `gpt-6.1-terra` in 4 sessions and `gpt-6-luna` in 2.
+
+![Results with a wiki](wiki-effect.png)
 
 ### What it shows
 
@@ -65,16 +71,21 @@ Pass count, then median tool calls.
 | audit-logs | 3/3, 9 | 3/3, 10 | 2/3, 116 | 3/3, 20 | 1/1, 170 | 1/1, 13 |
 | os-registries | 3/3, 13 | 3/3, 15 | 3/3, 47 | 3/3, 16 | 1/1, 72 | 1/1, 15 |
 | flp-logging | 3/3, 7 | 3/3, 9 | 3/3, 54 | 3/3, 21 | 1/1, 77 | 1/1, 7 |
-| model-cache | 2/3, 17 | 3/3, 11 | 3/3, 83 | 3/3, 33 | 1/1, 202 | 1/1, 26 |
+| model-cache | 3/3, 17 | 3/3, 11 | 3/3, 83 | 3/3, 33 | 1/1, 202 | 1/1, 26 |
 | sql-leak | 3/3, 5 | 3/3, 10 | 3/3, 77 | 3/3, 21 | 1/1, 130 | 1/1, 12 |
 | tenant-leak | 3/3, 6 | 3/3, 5 | 3/3, 43 | 3/3, 22 | 1/1, 97 | 1/1, 10 |
 
+![Tool calls per task](per-task.png)
+
+The images are generated from `sessions.csv` by [`make-images.mjs`](make-images.mjs).
+
 ## Limits
 
-- **Ceiling:** every row passes 17 or 18 of 18, so pass rate separates nothing. The differences are in effort, size and cost.
+- **Ceiling:** every row passes 17 or 18 of 18 (6 of 6 in the wiki rows), so pass rate separates nothing. The differences are in effort, size and cost.
 - **Sample:** three attempts per task, one for the wiki rows. Only large differences mean anything.
 - **Tickets:** written for this experiment from the PR descriptions. They are more precise than most real tickets, and some name the affected class or package.
 - **Reference fixes:** the real Webiny fixes were written with Claude Code, which may favour Claude models on similarity to the reference.
+- **Re-grading:** one Claude Code session was first marked failed because the test database port was busy during grading. It passed when re-graded from its saved patch.
 - **Hidden tests:** three of the real test files asserted on exact error text, exact log text or an exact instance count. Those assertions were loosened so that a different correct fix is not failed. All sessions were graded with the same tests.
 - **Session shape:** single short sessions. Long interactive sessions with context compaction are not covered.
 - **Auto is not fixed:** which model Auto picks depends on the subscription and the day.
