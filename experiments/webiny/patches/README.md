@@ -4,6 +4,8 @@ One file per session: the diff the agent left in the workspace, against the Webi
 
 Two of the 108 sessions are left out (`E-copilot-auto-wiki`: `sql-leak.1`, `model-cache.1`) because they changed files in Webiny packages that are not MIT-licensed. Their numbers are still in `sessions.csv`.
 
+Rows G to N are the vague-ticket sessions. Six of those 154 are left out for the same reason (`I-copilot-auto-vague` and `M-claude-opus-vague`: `model-cache-vague.1` to `.3`). Their numbers are in `sessions-vague.csv`.
+
 The patches, and the `fix.patch` and `hidden/` files under `../harness/tasks/`, contain Webiny source code. That code is from MIT-licensed packages of [webiny/webiny-js](https://github.com/webiny/webiny-js) and is covered by this notice:
 
 ```

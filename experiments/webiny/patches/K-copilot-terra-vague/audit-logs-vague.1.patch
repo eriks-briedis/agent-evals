@@ -1,0 +1,274 @@
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..aa495acc 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -14,10 +14,11 @@ import type { SecurityPermission } from "@webiny/api-core/types/security.js";
+ export interface UseHandlerParams {
+     permissions?: SecurityPermission[];
+     identity?: IdentityData | null;
++    extraCmsPlugins?: CmsTestHandlerParams["extraCmsPlugins"];
+ }
+ 
+ export const useHandler = (params: UseHandlerParams = {}) => {
+-    const { permissions, identity } = params;
++    const { permissions, identity, extraCmsPlugins } = params;
+ 
+     const apiAcoStorage = getStorageOps<any>("aco");
+     const auditLogsStorage = getStorageOps<any>("auditLogs");
+@@ -32,6 +33,7 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+         // aco storage plugins are processed during setup (before HeadlessCmsFeature)
+         legacyPlugins: apiAcoStorage.plugins,
+         testProjectLicense,
++        extraCmsPlugins,
+         setup: container => {
+             // CompressionFeature must be registered before the audit logs DDB legacy plugin runs,
+             // because that plugin eagerly resolves CompressionHandler from the container.
+@@ -48,6 +50,8 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
++        invoke: inner.invoke,
++        invokeCms: inner.invokeCms,
+         handler: () => inner.getContext<AuditLogsContext>()
+     };
+ };
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..19fda19d
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,191 @@
++import { describe, expect, it } from "vitest";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { RoleAfterUpdateEvent } from "@webiny/api-core/features/security/roles/UpdateRole/events.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++import { EntryAfterUpdateEvent } from "@webiny/api-headless-cms/features/contentEntry/UpdateEntry/events.js";
++import { CmsModelPlugin, createModelField } from "@webiny/api-headless-cms";
++import { useHandler } from "./helpers/useHandler.js";
++
++describe("audit log subscriptions", () => {
++    it("records content created and updated through the CMS endpoint", async () => {
++        const model = new CmsModelPlugin({
++            modelId: "article",
++            name: "Article",
++            singularApiName: "Article",
++            pluralApiName: "Articles",
++            group: "content",
++            icon: null,
++            fields: [
++                createModelField({ id: "title", fieldId: "title", type: "text", label: "Title" })
++            ],
++            layout: [["title"]],
++            description: "",
++            titleFieldId: "title"
++        });
++        const { invoke, invokeCms } = useHandler({ extraCmsPlugins: [model] });
++        const [created] = await invokeCms({
++            body: {
++                query: `mutation {
++                    createArticle(data: { values: { title: "Before" } }) {
++                        data { id entryId }
++                        error { message }
++                    }
++                }`
++            }
++        });
++        expect(created.errors).toBeUndefined();
++        expect(created.data.createArticle.error).toBeNull();
++        const { id, entryId } = created.data.createArticle.data;
++        const [updated] = await invokeCms({
++            body: {
++                query: `mutation ($id: ID!) {
++                    updateArticle(revision: $id, data: { values: { title: "After" } }) {
++                        data { id }
++                        error { message }
++                    }
++                }`,
++                variables: { id }
++            }
++        });
++        expect(updated.errors).toBeUndefined();
++        expect(updated.data.updateArticle.error).toBeNull();
++        const [response] = await invoke({
++            body: {
++                query: `query {
++                    auditLogs {
++                        listAuditLogs(where: {}) {
++                            data { app entity action entityId }
++                            error { message }
++                        }
++                    }
++                }`
++            }
++        });
++        expect(response.errors).toBeUndefined();
++        expect(response.data.auditLogs.listAuditLogs.error).toBeNull();
++        expect(response.data.auditLogs.listAuditLogs.data).toEqual(
++            expect.arrayContaining([
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY",
++                    action: "CREATE",
++                    entityId: entryId
++                }),
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY_REVISION",
++                    action: "UPDATE",
++                    entityId: id
++                })
++            ])
++        );
++    });
++
++    it("records domain events and exposes them through GraphQL", async () => {
++        const { handler, invoke, identity } = useHandler();
++        const context = await handler();
++        const publisher = context.container.resolve(EventPublisher);
++
++        const entry = { id: "entry#0001", entryId: "entry", values: { title: "Before" } };
++        const updatedEntry = { ...entry, values: { title: "After" } };
++        const model = { modelId: "article", isPrivate: false };
++        await publisher.publish(
++            new EntryAfterCreateEvent({
++                entry,
++                model,
++                input: {}
++            } as EntryAfterCreateEvent["payload"])
++        );
++        await publisher.publish(
++            new EntryAfterUpdateEvent({
++                entry: updatedEntry,
++                original: entry,
++                model,
++                input: {}
++            } as EntryAfterUpdateEvent["payload"])
++        );
++        await publisher.publish(
++            new EntryAfterCreateEvent({
++                entry: { ...entry, entryId: "private" },
++                model: { ...model, isPrivate: true },
++                input: {}
++            } as EntryAfterCreateEvent["payload"])
++        );
++        await publisher.publish(
++            new FileAfterCreateEvent({
++                file: { id: "file", name: "photo.jpg" }
++            } as FileAfterCreateEvent["payload"])
++        );
++        await publisher.publish(
++            new RoleAfterUpdateEvent({
++                original: { id: "role", name: "Editor" },
++                updated: { id: "role", name: "Senior editor" },
++                input: { name: "Senior editor" }
++            } as RoleAfterUpdateEvent["payload"])
++        );
++
++        const [response] = await invoke({
++            body: {
++                query: `query {
++                    auditLogs {
++                        listAuditLogs(where: {}) {
++                            data { id app entity action entityId message createdBy { id } }
++                            error { message }
++                        }
++                    }
++                }`
++            }
++        });
++        expect(response.errors).toBeUndefined();
++        const list = response.data.auditLogs.listAuditLogs;
++        expect(list.error).toBeNull();
++        expect(list.data).toHaveLength(4);
++        expect(list.data).toEqual(
++            expect.arrayContaining([
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY",
++                    action: "CREATE",
++                    entityId: "entry",
++                    createdBy: { id: identity!.id }
++                }),
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY_REVISION",
++                    action: "UPDATE",
++                    entityId: "entry#0001"
++                }),
++                expect.objectContaining({
++                    app: "FILE_MANAGER",
++                    entity: "FILE",
++                    action: "CREATE",
++                    entityId: "file"
++                }),
++                expect.objectContaining({
++                    app: "SECURITY",
++                    entity: "ROLE",
++                    action: "UPDATE",
++                    entityId: "role"
++                })
++            ])
++        );
++
++        const id = list.data[0].id;
++        const [getResponse] = await invoke({
++            body: {
++                query: `query ($id: ID!) {
++                    auditLogs {
++                        getAuditLog(id: $id) { data { id } error { message } }
++                    }
++                }`,
++                variables: { id }
++            }
++        });
++        expect(getResponse.errors).toBeUndefined();
++        expect(getResponse.data.auditLogs.getAuditLog).toEqual({
++            data: { id },
++            error: null
++        });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..98d598c5 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..4c70c9ed 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver({ auditLogs }: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +132,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver({ auditLogs }: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

@@ -1,0 +1,145 @@
+diff --git a/packages/api-opensearch/__tests__/registries.test.ts b/packages/api-opensearch/__tests__/registries.test.ts
+new file mode 100644
+index 00000000..7d7e428b
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registries.test.ts
+@@ -0,0 +1,78 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++import { OpenSearchIndexFeature } from "~/features/OpenSearchIndex/feature.js";
++import { OpenSearchIndex } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndex.js";
++import { OpenSearchIndexRegistry } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.js";
++
++class CustomOperatorImpl implements OpenSearchQueryBuilderOperator.Interface {
++    public getOperator(): string {
++        return "custom";
++    }
++
++    public apply(): void {
++        // noop
++    }
++}
++
++const CustomOperator = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: CustomOperatorImpl,
++    dependencies: []
++});
++
++class CustomIndexImpl implements OpenSearchIndex.Interface {
++    public readonly body = { settings: {} } as OpenSearchIndex.Interface["body"];
++
++    public canUse(): boolean {
++        return true;
++    }
++}
++
++const CustomIndex = OpenSearchIndex.createImplementation({
++    implementation: CustomIndexImpl,
++    dependencies: []
++});
++
++/**
++ * Core features are registered once in the root container; extensions register their
++ * implementations per request, in a child container. The registries must see both.
++ */
++describe("OpenSearch registries with per-request extensions", () => {
++    const createRoot = () => {
++        const root = new Container();
++        OpenSearchQueryBuilderOperatorFeature.register(root);
++        OpenSearchIndexFeature.register(root);
++        return root;
++    };
++
++    it("operator registry includes operators registered in a child container", () => {
++        const root = createRoot();
++        // Resolve once in the root first, as other code might do before any request runs.
++        expect(root.resolve(OpenSearchQueryBuilderOperatorRegistry).get("custom")).toBeUndefined();
++
++        const child = root.createChildContainer();
++        child.register(CustomOperator);
++        const registry = child.resolve(OpenSearchQueryBuilderOperatorRegistry);
++
++        expect(registry.get("custom")).toBeInstanceOf(CustomOperatorImpl);
++        expect(registry.get("eq")).toBeDefined();
++
++        // A sibling request without the extension must not see it.
++        const other = root.createChildContainer();
++        expect(other.resolve(OpenSearchQueryBuilderOperatorRegistry).get("custom")).toBeUndefined();
++    });
++
++    it("index registry includes indexes registered in a child container", () => {
++        const root = createRoot();
++        expect(() => root.resolve(OpenSearchIndexRegistry).getLastAdded()).toThrow();
++
++        const child = root.createChildContainer();
++        child.register(CustomIndex);
++        const registry = child.resolve(OpenSearchIndexRegistry);
++
++        expect(registry.getLastAdded()).toBeInstanceOf(CustomIndexImpl);
++        expect(registry.getAll()).toHaveLength(1);
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..5f7d4348 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,9 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        // Container scoped: this feature is registered once in the root container, but extensions
++        // register their own indexes per request (child container). A singleton registry would be
++        // built once from the root's indexes only and silently ignore every extension index.
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..f4003b87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -19,21 +19,25 @@ import { NotStartsWith } from "./operators/NotStartsWith.js";
+ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+     name: "opensearch.internal.queryBuilderOperator",
+     register(container) {
+-        container.register(Equal).inSingletonScope();
+-        container.register(Not).inSingletonScope();
+-        container.register(Contains).inSingletonScope();
+-        container.register(NotContains).inSingletonScope();
+-        container.register(Between).inSingletonScope();
+-        container.register(NotBetween).inSingletonScope();
+-        container.register(GreaterThan).inSingletonScope();
+-        container.register(GreaterThanOrEqual).inSingletonScope();
+-        container.register(LesserThan).inSingletonScope();
+-        container.register(LesserThanOrEqual).inSingletonScope();
+-        container.register(In).inSingletonScope();
+-        container.register(AndIn).inSingletonScope();
+-        container.register(NotIn).inSingletonScope();
+-        container.register(StartsWith).inSingletonScope();
+-        container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        // Container scoped: this feature is registered once in the root container, but extensions
++        // register their own operators per request (child container). A singleton registry would be
++        // built once from the root's operators only and silently ignore every extension operator.
++        container.register(Equal).inContainerScope();
++        container.register(Not).inContainerScope();
++        container.register(Contains).inContainerScope();
++        container.register(NotContains).inContainerScope();
++        container.register(Between).inContainerScope();
++        container.register(NotBetween).inContainerScope();
++        container.register(GreaterThan).inContainerScope();
++        container.register(GreaterThanOrEqual).inContainerScope();
++        container.register(LesserThan).inContainerScope();
++        container.register(LesserThanOrEqual).inContainerScope();
++        container.register(In).inContainerScope();
++        container.register(AndIn).inContainerScope();
++        container.register(NotIn).inContainerScope();
++        container.register(StartsWith).inContainerScope();
++        container.register(NotStartsWith).inContainerScope();
++        // must be registered last
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });

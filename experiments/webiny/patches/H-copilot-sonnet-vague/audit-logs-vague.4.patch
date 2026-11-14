@@ -1,0 +1,58 @@
+diff --git a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+index 9737551f..39ab68fb 100644
+--- a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
++++ b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+@@ -19,7 +19,7 @@ export const AuditLogsDdbFeature = createFeature({
+             const compressionHandler = container.resolve(CompressionHandler);
+             return createStorage({
+                 client: db.client,
+-                tableName: config.tableName ?? process.env.DB_TABLE,
++                tableName: config.tableName,
+                 compressionHandler
+             });
+         });
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..834fc7ff 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +133,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

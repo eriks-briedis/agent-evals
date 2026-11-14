@@ -1,0 +1,268 @@
+diff --git a/packages/api-audit-logs/__tests__/eventSubscriptions.test.ts b/packages/api-audit-logs/__tests__/eventSubscriptions.test.ts
+new file mode 100644
+index 00000000..4ba5daec
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/eventSubscriptions.test.ts
+@@ -0,0 +1,121 @@
++import { describe, expect, it } from "vitest";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/index.js";
++import { FeatureFlags } from "@webiny/api-core/features/featureFlags/abstractions.js";
++import { Container } from "@webiny/di";
++import { GraphQLContextualSchema } from "@webiny/api-graphql";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++import { EntryAfterCreateEventHandler } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/index.js";
++import { EntryAfterUpdateEvent } from "@webiny/api-headless-cms/features/contentEntry/UpdateEntry/events.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++import { RoleAfterUpdateEvent } from "@webiny/api-core/features/security/roles/UpdateRole/index.js";
++import { AuditLogsFeature } from "~/AuditLogsFeature.js";
++import { AuditLogsContext, AuditLogsStorage } from "~/abstractions.js";
++import { useHandler } from "./helpers/useHandler.js";
++
++describe.skipIf(process.env.WEBINY_STORAGE?.includes("sql"))("audit event subscriptions", () => {
++    it("records content, file and role events and exposes them through GraphQL", async () => {
++        const { handler, invoke } = useHandler();
++        const context = await handler();
++        const publisher = context.container.resolve(EventPublisher);
++
++        const entry = { id: "entry#0001", entryId: "entry" };
++        const model = { isPrivate: false };
++        await publisher.publish(
++            new EntryAfterCreateEvent({
++                entry,
++                model,
++                input: {}
++            } as EntryAfterCreateEvent["payload"])
++        );
++        await publisher.publish(
++            new EntryAfterUpdateEvent({
++                entry,
++                original: entry,
++                model,
++                input: {}
++            } as EntryAfterUpdateEvent["payload"])
++        );
++        await publisher.publish(
++            new FileAfterCreateEvent({
++                file: { id: "file" }
++            } as FileAfterCreateEvent["payload"])
++        );
++        await publisher.publish(
++            new RoleAfterUpdateEvent({
++                original: { id: "role" },
++                updated: { id: "role" },
++                input: {}
++            } as RoleAfterUpdateEvent["payload"])
++        );
++
++        const [response] = await invoke({
++            body: {
++                query: `query {
++                    auditLogs {
++                        listAuditLogs {
++                            data { id message entityId createdBy { id } }
++                            error { message }
++                        }
++                    }
++                }`
++            }
++        });
++        expect(response.errors).toBeUndefined();
++        const result = response.data.auditLogs.listAuditLogs;
++        expect(result.error).toBeNull();
++        expect(result.data).toHaveLength(4);
++        expect(result.data).toEqual(
++            expect.arrayContaining([
++                expect.objectContaining({ message: "Entry created", entityId: "entry" }),
++                expect.objectContaining({
++                    message: "Entry revision updated",
++                    entityId: "entry#0001"
++                }),
++                expect.objectContaining({ message: "File created", entityId: "file" }),
++                expect.objectContaining({ message: "Role updated", entityId: "role" })
++            ])
++        );
++        const identityId = context.container.resolve(IdentityContext).getIdentity().id;
++        expect(
++            result.data.every(
++                (log: { createdBy: { id: string } }) => log.createdBy.id === identityId
++            )
++        ).toBe(true);
++
++        const [getResponse] = await invoke({
++            body: {
++                query: `query GetAuditLog($id: ID!) {
++                    auditLogs { getAuditLog(id: $id) { data { id } error { message } } }
++                }`,
++                variables: { id: result.data[0].id }
++            }
++        });
++        expect(getResponse.errors).toBeUndefined();
++        expect(getResponse.data.auditLogs.getAuditLog).toEqual({
++            data: { id: result.data[0].id },
++            error: null
++        });
++    });
++
++    it("initializes each context without registering duplicate handlers", async () => {
++        const existing = await useHandler().handler();
++        const container = new Container();
++        container.registerInstance(FeatureFlags, existing.container.resolve(FeatureFlags));
++        container.registerInstance(AuditLogsStorage, existing.container.resolve(AuditLogsStorage));
++        container.registerInstance(EventPublisher, existing.container.resolve(EventPublisher));
++        AuditLogsFeature.register(container);
++
++        const [schema] = container.resolveAll(GraphQLContextualSchema);
++        const first = { container };
++        const second = { container };
++        await schema.build(first);
++        expect(container.resolve(AuditLogsContext)).toBe(first);
++        expect(container.resolveAll(EntryAfterCreateEventHandler)).toHaveLength(1);
++
++        await schema.build(second);
++        expect(container.resolve(AuditLogsContext)).toBe(second);
++        expect(second).toHaveProperty("auditLogs");
++        expect(container.resolveAll(EntryAfterCreateEventHandler)).toHaveLength(1);
++    });
++});
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..57b4c4ae 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -48,6 +48,7 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
+-        handler: () => inner.getContext<AuditLogsContext>()
++        handler: () => inner.getContext<AuditLogsContext>(),
++        invoke: inner.invoke
+     };
+ };
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..dd07e4e1 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -37,11 +37,6 @@ export const AuditLogsFeature = createFeature({
+ 
+         container.registerInstance(GraphQLContextualSchema, {
+             async build(ctx: Record<string, any>): Promise<GraphQLSchema> {
+-                if (initialized) {
+-                    return STUB_SCHEMA;
+-                }
+-                initialized = true;
+-
+                 const storage = container.resolve(AuditLogsStorage);
+                 const eventPublisher = container.resolve(EventPublisher);
+ 
+@@ -52,8 +47,11 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
+-                createSubscriptionHooks(ctx as any);
++                container.registerInstance(AuditLogsContext, ctx as any);
++                if (!initialized) {
++                    createSubscriptionHooks(ctx as any);
++                    initialized = true;
++                }
+ 
+                 return STUB_SCHEMA;
+             }
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..c3413661 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -118,7 +117,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+                             throw createZodError(validation.error);
+                         }
+ 
+-                        const result = await auditLogs.getAuditLog(validation.data.id);
++                        const result = await context.auditLogs.getAuditLog(validation.data.id);
+                         if (!result) {
+                             throw new NotFoundError(
+                                 `Audit log with id "${validation.data.id}" not found.`
+@@ -133,14 +132,14 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);
+                         if (!validation.success) {
+                             throw createZodError(validation.error);
+                         }
+-                        const result = await auditLogs.listAuditLogs({
++                        const result = await context.auditLogs.listAuditLogs({
+                             ...validation.data,
+                             ...validation.data.where
+                         });
+diff --git a/packages/api-audit-logs/src/graphql/validation.ts b/packages/api-audit-logs/src/graphql/validation.ts
+index 819f8fce..e553a395 100644
+--- a/packages/api-audit-logs/src/graphql/validation.ts
++++ b/packages/api-audit-logs/src/graphql/validation.ts
+@@ -5,25 +5,27 @@ export const getValidationSchema = zod.object({
+ });
+ 
+ export const listValidationSchema = zod.object({
+-    where: zod.object({
+-        app: zod.string().min(1, "App is required.").optional(),
+-        entity: zod.string().optional(),
+-        entityId: zod.string().min(1, "Entity ID is required.").optional(),
+-        createdOn_gte: zod.preprocess(input => {
+-            if (typeof input == "string" || input instanceof Date) {
+-                return new Date(input);
+-            }
+-            return undefined;
+-        }, zod.date().optional()),
+-        createdOn_lte: zod.preprocess(input => {
+-            if (typeof input == "string" || input instanceof Date) {
+-                return new Date(input);
+-            }
+-            return undefined;
+-        }, zod.date().optional()),
+-        createdBy: zod.string().optional(),
+-        action: zod.string().optional()
+-    }),
++    where: zod
++        .object({
++            app: zod.string().min(1, "App is required.").optional(),
++            entity: zod.string().optional(),
++            entityId: zod.string().min(1, "Entity ID is required.").optional(),
++            createdOn_gte: zod.preprocess(input => {
++                if (typeof input == "string" || input instanceof Date) {
++                    return new Date(input);
++                }
++                return undefined;
++            }, zod.date().optional()),
++            createdOn_lte: zod.preprocess(input => {
++                if (typeof input == "string" || input instanceof Date) {
++                    return new Date(input);
++                }
++                return undefined;
++            }, zod.date().optional()),
++            createdBy: zod.string().optional(),
++            action: zod.string().optional()
++        })
++        .optional(),
+     after: zod.string().optional(),
+     sort: zod.enum(["ASC", "DESC"]).optional(),
+     limit: zod

@@ -1,0 +1,35 @@
+{
+  "id": "webiny-model-cache-vague",
+  "category": "replay-vague",
+  "prepared": "../../prepared/webiny-model-cache",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 5912,
+    "fix": "16ad7efadc",
+    "srcPaths": [
+      "packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts",
+      "packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts",
+      "packages/api-headless-cms/src/features/modelBuilder/feature.ts",
+      "packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-headless-cms/__tests__/contentModel/modelsFetcherAccessControl.test.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-headless-cms/__tests__/contentModel/modelsFetcherAccessControl.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "ddb"
+    },
+    "minTests": 1
+  },
+  "prompt": "The GraphQL schema is not always the same. For requests made without logging in, the tenant's `extensions` field is typed as plain `JSON`; for logged-in admins it is the typed input (`Tenant_ExtensionsInput`). It should not depend on who is asking. It also makes cold starts slower for us, because the schema gets built twice. Find the cause and fix it.",
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything.",
+  "checks": {
+    "maxSizeRatio": 3,
+    "maxSourceFiles": 7
+  }
+}

@@ -1,0 +1,52 @@
+diff --git a/packages/api-audit-logs/__tests__/eventHandlers.test.ts b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+new file mode 100644
+index 00000000..9ebee217
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+@@ -0,0 +1,33 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "./helpers/useHandler";
++import { AuditLogsContext } from "~/abstractions.js";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { UserAfterUpdateEvent } from "@webiny/api-core/features/users/UpdateUser/events.js";
++
++describe("audit log event handlers", () => {
++    it("should resolve the full request context for handlers", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const resolved = context.container.resolve(AuditLogsContext) as any;
++        expect(resolved.auditLogs).toBeDefined();
++        expect(resolved.container).toBeDefined();
++    });
++
++    it("should store an audit log when a domain event is published", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const user = { id: "user-1", email: "a@b.c" } as any;
++        await context.container.resolve(EventPublisher).publish(
++            new UserAfterUpdateEvent({
++                originalUser: user,
++                updatedUser: { ...user, email: "d@e.f" }
++            } as any)
++        );
++
++        const result = await context.auditLogs.listAuditLogs({});
++        expect(result.items).toHaveLength(1);
++        expect(result.items?.[0]).toMatchObject({ entityId: "user-1", message: "User updated" });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;

@@ -1,0 +1,312 @@
+diff --git a/packages/api-core-sql/__tests__/__api__/setupAfterEnv.js b/packages/api-core-sql/__tests__/__api__/setupAfterEnv.js
+index 49e9d0b9..77afc7c8 100644
+--- a/packages/api-core-sql/__tests__/__api__/setupAfterEnv.js
++++ b/packages/api-core-sql/__tests__/__api__/setupAfterEnv.js
+@@ -1,5 +1,7 @@
+ import { beforeEach, afterAll } from "vitest";
+ 
++globalThis.__sqlTableManagers ??= [];
++
+ async function dropAllTablesSqlite(knex) {
+     const tables = await knex.raw(
+         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+@@ -21,10 +23,11 @@ beforeEach(async () => {
+         await dropAllTablesSqlite(knex);
+     }
+ 
+-    const managers = globalThis.__sqlTableManagers || [];
+-    for (const manager of managers) {
+-        manager.reset();
+-    }
++    globalThis.__sqlTableManagers = globalThis.__sqlTableManagers.filter(ref => {
++        const manager = ref.deref();
++        manager?.reset();
++        return !!manager;
++    });
+ });
+ 
+ afterAll(async () => {
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..1b10e378 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -16,8 +16,8 @@ export class TableManager implements ITableManager {
+         this.prefix = prefix ? `${prefix}_` : "";
+ 
+         const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+-        managers.push(this);
++        const managers = g.__sqlTableManagers as WeakRef<ITableManager>[] | undefined;
++        managers?.push(new WeakRef(this));
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-pg-os/__tests__/__api__/setupAfterEnv.js b/packages/api-headless-cms-pg-os/__tests__/__api__/setupAfterEnv.js
+index e5673025..ce3983bd 100644
+--- a/packages/api-headless-cms-pg-os/__tests__/__api__/setupAfterEnv.js
++++ b/packages/api-headless-cms-pg-os/__tests__/__api__/setupAfterEnv.js
+@@ -3,6 +3,8 @@ import { setupTestIndexManager } from "@webiny/api-opensearch/testing";
+ 
+ setupTestIndexManager({ global });
+ 
++globalThis.__sqlTableManagers ??= [];
++
+ beforeEach(async () => {
+     const knex = global.__testKnex;
+     if (!knex) {
+@@ -11,10 +13,11 @@ beforeEach(async () => {
+ 
+     await global.__testClient.dropAllTables(knex);
+ 
+-    const managers = globalThis.__sqlTableManagers || [];
+-    for (const manager of managers) {
+-        manager.reset();
+-    }
++    globalThis.__sqlTableManagers = globalThis.__sqlTableManagers.filter(ref => {
++        const manager = ref.deref();
++        manager?.reset();
++        return !!manager;
++    });
+ });
+ 
+ afterAll(async () => {
+diff --git a/packages/api-headless-cms-pg-os/__tests__/syncTableManager.test.ts b/packages/api-headless-cms-pg-os/__tests__/syncTableManager.test.ts
+index 229e541e..51e0cc6a 100644
+--- a/packages/api-headless-cms-pg-os/__tests__/syncTableManager.test.ts
++++ b/packages/api-headless-cms-pg-os/__tests__/syncTableManager.test.ts
+@@ -1,4 +1,4 @@
+-import { describe, it, expect, beforeEach } from "vitest";
++import { describe, it, expect, beforeEach, vi } from "vitest";
+ import knexLib from "knex";
+ import { PGlite } from "@electric-sql/pglite";
+ import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
+@@ -50,6 +50,33 @@ describe("SyncTableManager", () => {
+         expect(exists).toBe(true);
+     });
+ 
++    it("only registers managers when the test registry is enabled", () => {
++        const createManager = () => {
++            const container = new Container();
++            container.registerInstance(KnexClient, { client: knex });
++            container.registerInstance(TableNameResolverConfig, { sharedTables: false });
++            TableNameResolverFeature.register(container);
++            SyncTableManagerFeature.register(container);
++            return container.resolve(SyncTableManager);
++        };
++
++        try {
++            vi.stubGlobal("__sqlTableManagers", undefined);
++            for (let i = 0; i < 10; i++) {
++                createManager();
++            }
++            expect(globalThis).toHaveProperty("__sqlTableManagers", undefined);
++
++            const refs: WeakRef<SyncTableManager.Interface>[] = [];
++            vi.stubGlobal("__sqlTableManagers", refs);
++            const manager = createManager();
++            expect(refs).toHaveLength(1);
++            expect(refs[0].deref()).toBe(manager);
++        } finally {
++            vi.unstubAllGlobals();
++        }
++    });
++
+     it("should be idempotent on repeated ensureTable calls", async () => {
+         const container = new Container();
+         container.registerInstance(KnexClient, { client: knex });
+diff --git a/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts b/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
+index e29918e8..52f16a89 100644
+--- a/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
++++ b/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
+@@ -13,8 +13,10 @@ class SyncTableManagerImpl implements SyncTableManagerAbstraction.Interface {
+         this.tableName = tableNameResolver.resolve("os_sync");
+ 
+         const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as SyncTableManagerAbstraction.Interface[];
+-        managers.push(this);
++        const managers = g.__sqlTableManagers as
++            | WeakRef<SyncTableManagerAbstraction.Interface>[]
++            | undefined;
++        managers?.push(new WeakRef(this));
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/__tests__/__api__/setupAfterEnv.js b/packages/api-headless-cms-sql/__tests__/__api__/setupAfterEnv.js
+index a595a64e..daabf261 100644
+--- a/packages/api-headless-cms-sql/__tests__/__api__/setupAfterEnv.js
++++ b/packages/api-headless-cms-sql/__tests__/__api__/setupAfterEnv.js
+@@ -1,5 +1,7 @@
+ import { beforeEach, afterAll } from "vitest";
+ 
++globalThis.__sqlTableManagers ??= [];
++
+ beforeEach(async () => {
+     const knex = global.__testKnex;
+     if (!knex) {
+@@ -8,10 +10,11 @@ beforeEach(async () => {
+ 
+     await global.__testClient.dropAllTables(knex);
+ 
+-    const managers = globalThis.__sqlTableManagers || [];
+-    for (const manager of managers) {
+-        manager.reset();
+-    }
++    globalThis.__sqlTableManagers = globalThis.__sqlTableManagers.filter(ref => {
++        const manager = ref.deref();
++        manager?.reset();
++        return !!manager;
++    });
+ });
+ 
+ afterAll(async () => {
+diff --git a/packages/api-headless-cms-sql/__tests__/tableManagerRegistration.test.ts b/packages/api-headless-cms-sql/__tests__/tableManagerRegistration.test.ts
+new file mode 100644
+index 00000000..7e5cb60c
+--- /dev/null
++++ b/packages/api-headless-cms-sql/__tests__/tableManagerRegistration.test.ts
+@@ -0,0 +1,94 @@
++import { afterEach, expect, it, vi } from "vitest";
++import knexLib from "knex";
++import { Container } from "@webiny/feature/api";
++import { KnexClient } from "@webiny/api-core-sql";
++import { TableManager } from "@webiny/api-core-sql/TableManager.js";
++import { TableNameResolverConfig } from "../src/features/tableNameResolver/abstractions.js";
++import { TableNameResolverFeature } from "../src/features/tableNameResolver/feature.js";
++import { EntryTableManager } from "../src/features/entryTableManager/abstractions.js";
++import { EntryTableManagerFeature } from "../src/features/entryTableManager/feature.js";
++import { GroupSchemaManager } from "../src/features/groupSchemaManager/abstractions.js";
++import { GroupSchemaManagerFeature } from "../src/features/groupSchemaManager/feature.js";
++import { ModelSchemaManager } from "../src/features/modelSchemaManager/abstractions.js";
++import { ModelSchemaManagerFeature } from "../src/features/modelSchemaManager/feature.js";
++
++afterEach(() => {
++    vi.unstubAllGlobals();
++});
++
++it("only registers SQL managers when the test registry is enabled", async () => {
++    const knex = knexLib({ client: "better-sqlite3", connection: { filename: ":memory:" } });
++    const createManagers = () => {
++        const container = new Container();
++        container.registerInstance(KnexClient, { client: knex });
++        container.registerInstance(TableNameResolverConfig, { sharedTables: false });
++        TableNameResolverFeature.register(container);
++        EntryTableManagerFeature.register(container);
++        GroupSchemaManagerFeature.register(container);
++        ModelSchemaManagerFeature.register(container);
++        return [
++            container.resolve(EntryTableManager),
++            container.resolve(GroupSchemaManager),
++            container.resolve(ModelSchemaManager)
++        ] as const;
++    };
++
++    try {
++        vi.stubGlobal("__sqlTableManagers", undefined);
++        for (let i = 0; i < 10; i++) {
++            createManagers();
++        }
++        expect(globalThis).toHaveProperty("__sqlTableManagers", undefined);
++
++        const refs: WeakRef<{ reset(): void }>[] = [];
++        vi.stubGlobal("__sqlTableManagers", refs);
++        const managers = createManagers();
++        expect(refs.map(ref => ref.deref())).toEqual(managers);
++
++        const [entries, groups, models] = managers;
++        const ensureTables = async () => {
++            await entries.ensureTable();
++            await groups.ensure("groups");
++            await models.ensure("models");
++        };
++        await ensureTables();
++        for (const name of [entries.getTableName(), "groups", "models"]) {
++            await knex.schema.dropTable(name);
++        }
++        for (const ref of refs) {
++            ref.deref()?.reset();
++        }
++        await ensureTables();
++        for (const name of [entries.getTableName(), "groups", "models"]) {
++            expect(await knex.schema.hasTable(name)).toBe(true);
++        }
++    } finally {
++        await knex.destroy();
++    }
++});
++
++it("only registers core table managers for test resets", async () => {
++    const knex = knexLib({ client: "better-sqlite3", connection: { filename: ":memory:" } });
++    try {
++        vi.stubGlobal("__sqlTableManagers", undefined);
++        for (let i = 0; i < 10; i++) {
++            new TableManager(knex);
++        }
++        expect(globalThis).toHaveProperty("__sqlTableManagers", undefined);
++
++        const refs: WeakRef<TableManager>[] = [];
++        vi.stubGlobal("__sqlTableManagers", refs);
++        const manager = new TableManager(knex);
++        expect(refs).toHaveLength(1);
++        expect(refs[0].deref()).toBe(manager);
++
++        const create = (table: import("knex").Knex.CreateTableBuilder) => table.text("id");
++        await manager.ensure("test_table", create);
++        await knex.schema.dropTable("test_table");
++        refs[0].deref()?.reset();
++        await manager.ensure("test_table", create);
++        expect(await knex.schema.hasTable("test_table")).toBe(true);
++    } finally {
++        await knex.destroy();
++    }
++});
+diff --git a/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts b/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
+index de4aeac0..a4ee776f 100644
+--- a/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
++++ b/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
+@@ -13,8 +13,10 @@ class EntryTableManagerImpl implements EntryTableManagerAbstraction.Interface {
+         this.tableName = tableNameResolver.resolve("entries");
+ 
+         const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as EntryTableManagerAbstraction.Interface[];
+-        managers.push(this);
++        const managers = g.__sqlTableManagers as
++            | WeakRef<EntryTableManagerAbstraction.Interface>[]
++            | undefined;
++        managers?.push(new WeakRef(this));
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts b/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
+index c8c6ccf0..49f593ff 100644
+--- a/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
++++ b/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
+@@ -9,8 +9,10 @@ class GroupSchemaManagerImpl implements GroupSchemaManagerAbstraction.Interface
+         this.knex = knex;
+ 
+         const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as GroupSchemaManagerAbstraction.Interface[];
+-        managers.push(this);
++        const managers = g.__sqlTableManagers as
++            | WeakRef<GroupSchemaManagerAbstraction.Interface>[]
++            | undefined;
++        managers?.push(new WeakRef(this));
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts b/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
+index cbb5b4e9..3ac92a54 100644
+--- a/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
++++ b/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
+@@ -9,8 +9,10 @@ class ModelSchemaManagerImpl implements ModelSchemaManagerAbstraction.Interface
+         this.knex = knex;
+ 
+         const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ModelSchemaManagerAbstraction.Interface[];
+-        managers.push(this);
++        const managers = g.__sqlTableManagers as
++            | WeakRef<ModelSchemaManagerAbstraction.Interface>[]
++            | undefined;
++        managers?.push(new WeakRef(this));
+     }
+ 
+     public reset(): void {

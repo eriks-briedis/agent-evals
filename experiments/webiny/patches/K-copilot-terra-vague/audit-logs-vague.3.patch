@@ -1,0 +1,272 @@
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..3428d030 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -48,6 +48,7 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
++        invoke: inner.invoke,
+         handler: () => inner.getContext<AuditLogsContext>()
+     };
+ };
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..87c18353
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,177 @@
++import { describe, expect, it } from "vitest";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { RoleAfterCreateEvent } from "@webiny/api-core/features/security/roles/CreateRole/events.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++import { EntryAfterUpdateEvent } from "@webiny/api-headless-cms/features/contentEntry/UpdateEntry/events.js";
++import type { CmsEntry, CmsModel } from "@webiny/api-headless-cms/types/index.js";
++import { useHandler } from "./helpers/useHandler.js";
++
++describe("audit log subscriptions", () => {
++    it("records domain events and exposes them through GraphQL", async () => {
++        const { handler, invoke } = useHandler();
++        const context = await handler();
++        const publisher = context.container.resolve(EventPublisher);
++        const identity = { id: "id-12345678", type: "admin", displayName: "John Doe" };
++        const date = "2026-01-01T00:00:00.000Z";
++        const model: CmsModel = {
++            modelId: "article",
++            name: "Article",
++            singularApiName: "Article",
++            pluralApiName: "Articles",
++            tenant: "root",
++            group: "content",
++            icon: null,
++            description: null,
++            fields: [],
++            layout: [],
++            titleFieldId: "title"
++        };
++        const entry: CmsEntry = {
++            id: "entry#0001",
++            entryId: "entry",
++            tenant: "root",
++            modelId: model.modelId,
++            version: 1,
++            locked: false,
++            status: "draft",
++            values: { title: "First" },
++            createdOn: date,
++            savedOn: date,
++            modifiedOn: null,
++            deletedOn: null,
++            restoredOn: null,
++            firstPublishedOn: null,
++            lastPublishedOn: null,
++            createdBy: identity,
++            savedBy: identity,
++            modifiedBy: null,
++            deletedBy: null,
++            restoredBy: null,
++            firstPublishedBy: null,
++            lastPublishedBy: null,
++            revisionCreatedOn: date,
++            revisionSavedOn: date,
++            revisionModifiedOn: null,
++            revisionDeletedOn: null,
++            revisionRestoredOn: null,
++            revisionFirstPublishedOn: null,
++            revisionLastPublishedOn: null,
++            revisionCreatedBy: identity,
++            revisionSavedBy: identity,
++            revisionModifiedBy: null,
++            revisionDeletedBy: null,
++            revisionRestoredBy: null,
++            revisionFirstPublishedBy: null,
++            revisionLastPublishedBy: null,
++            live: null,
++            revisionDescription: undefined,
++            expiresAt: null
++        };
++        const updated = { ...entry, values: { title: "Updated" } };
++        const file = {
++            id: "file-1",
++            key: "file-1/image.png",
++            size: 10,
++            type: "image/png",
++            name: "image.png",
++            metadata: {},
++            location: { folderId: "root" },
++            tags: [],
++            description: "",
++            createdOn: "2026-01-01T00:00:00.000Z",
++            modifiedOn: undefined,
++            savedOn: "2026-01-01T00:00:00.000Z",
++            createdBy: identity,
++            modifiedBy: undefined,
++            savedBy: identity
++        };
++        const roleInput = { name: "Editor", slug: "editor", description: "", permissions: [] };
++        const role = {
++            ...roleInput,
++            id: "role-1",
++            system: false,
++            createdOn: null,
++            createdBy: null
++        };
++
++        await publisher.publish(
++            new EntryAfterCreateEvent({ model, entry, input: { values: entry.values } })
++        );
++        await publisher.publish(
++            new EntryAfterUpdateEvent({
++                model,
++                entry: updated,
++                original: entry,
++                input: { values: updated.values }
++            })
++        );
++        await publisher.publish(new FileAfterCreateEvent({ file }));
++        await publisher.publish(new RoleAfterCreateEvent({ role, input: roleInput }));
++        await publisher.publish(
++            new EntryAfterCreateEvent({
++                model: { ...model, isPrivate: true },
++                entry,
++                input: { values: entry.values }
++            })
++        );
++
++        const [response] = await invoke({
++            body: {
++                query: `query {
++                    auditLogs {
++                        listAuditLogs(where: {}) {
++                            data { id app action entity entityId content }
++                            error { message }
++                        }
++                    }
++                }`
++            }
++        });
++
++        expect(response.errors).toBeUndefined();
++        const result = response.data.auditLogs.listAuditLogs;
++        expect(result.error).toBeNull();
++        expect(result.data).toHaveLength(4);
++        expect(result.data).toEqual(
++            expect.arrayContaining([
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    action: "CREATE",
++                    entity: "ENTRY",
++                    entityId: "entry"
++                }),
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    action: "UPDATE",
++                    entity: "ENTRY_REVISION",
++                    entityId: "entry#0001"
++                }),
++                expect.objectContaining({
++                    app: "FILE_MANAGER",
++                    action: "CREATE",
++                    entity: "FILE",
++                    entityId: "file-1"
++                }),
++                expect.objectContaining({
++                    app: "SECURITY",
++                    action: "CREATE",
++                    entity: "ROLE",
++                    entityId: "role-1"
++                })
++            ])
++        );
++
++        const id = result.data[0].id;
++        const [getResponse] = await invoke({
++            body: {
++                query: `query GetAuditLog($id: ID!) {
++                    auditLogs { getAuditLog(id: $id) { data { id } error { message } } }
++                }`,
++                variables: { id }
++            }
++        });
++        expect(getResponse.errors).toBeUndefined();
++        expect(getResponse.data.auditLogs.getAuditLog).toEqual({ data: { id }, error: null });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..355ff07f 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,8 +52,9 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
+-                createSubscriptionHooks(ctx as any);
++                const auditLogsContext = ctx as AuditLogsContext.Interface;
++                container.registerInstance(AuditLogsContext, auditLogsContext);
++                createSubscriptionHooks(auditLogsContext);
+ 
+                 return STUB_SCHEMA;
+             }
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..c3413661 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -118,7 +117,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+                             throw createZodError(validation.error);
+                         }
+ 
+-                        const result = await auditLogs.getAuditLog(validation.data.id);
++                        const result = await context.auditLogs.getAuditLog(validation.data.id);
+                         if (!result) {
+                             throw new NotFoundError(
+                                 `Audit log with id "${validation.data.id}" not found.`
+@@ -133,14 +132,14 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);
+                         if (!validation.success) {
+                             throw createZodError(validation.error);
+                         }
+-                        const result = await auditLogs.listAuditLogs({
++                        const result = await context.auditLogs.listAuditLogs({
+                             ...validation.data,
+                             ...validation.data.where
+                         });
+diff --git a/packages/api-audit-logs/src/utils/getAuditConfig.ts b/packages/api-audit-logs/src/utils/getAuditConfig.ts
+index 890eee33..bf3be77c 100644
+--- a/packages/api-audit-logs/src/utils/getAuditConfig.ts
++++ b/packages/api-audit-logs/src/utils/getAuditConfig.ts
+@@ -82,8 +82,7 @@ export const getAuditConfig = (audit: AuditAction) => {
+         context: AuditLogsContext
+     ): Promise<IAuditLog | null> => {
+         if (!context.auditLogs) {
+-            console.log("No AuditLogs defined.");
+-            return null;
++            throw new Error("Audit logs context is not defined.");
+         } else if (!audit) {
+             console.log(`No Audit Action defined!`);
+             return null;

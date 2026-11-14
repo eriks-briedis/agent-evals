@@ -1,0 +1,33 @@
+{
+  "id": "webiny-os-registries-vague",
+  "category": "replay-vague",
+  "prepared": "../../prepared/webiny-os-registries",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 5980,
+    "fix": "d9d4755c3a",
+    "srcPaths": [
+      "packages/api-opensearch/src/features/OpenSearchIndex/feature.ts",
+      "packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-opensearch/__tests__/registriesPerRequest.test.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-opensearch/__tests__/registriesPerRequest.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "ddb-os,ddb"
+    },
+    "minTests": 1
+  },
+  "prompt": "We have an extension that adds a custom OpenSearch query operator, and another one that adds its own index. Since the upgrade both are ignored: searching with the custom operator behaves as if it did not exist, and the custom index is never used. The built-in operators still work. Nothing is logged. Find out why and fix it.",
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything.",
+  "checks": {
+    "maxSizeRatio": 5,
+    "maxSourceFiles": 5
+  }
+}

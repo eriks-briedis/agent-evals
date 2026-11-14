@@ -11,6 +11,9 @@ The runner, tasks and hidden tests that produced [`../sessions.csv`](../sessions
 | `tasks/<id>/task.json` | Fix commit, ticket text, repo notes, test command, limits. |
 | `tasks/<id>/fix.patch` | The real fix, source files only. The yardstick for size and scope. |
 | `tasks/<id>/hidden/` | The tests from the real fix, added to the workspace only after the agent has finished. |
+| `tasks/<id>-vague/` | The same task with a symptom-only ticket (rows G to N). Same `fix.patch`; trimmed hidden tests. |
+| `tasks/<id>-vague-hint/` | The vague task with one sentence added to the ticket (rows J and L). |
+| `tasks/<id>-vague-preflight/` | The vague task with a spec-first procedure added to the ticket (row N). |
 
 ## How a session is graded
 
@@ -39,7 +42,20 @@ Three of the eight hidden files differ from the real fix, so that a different co
 | `webiny-sql-leak/hidden/.../TableManager.test.ts` | Extra `TableManager` instances: at most 1 instead of exactly 1. |
 | `webiny-tenant-leak/hidden/.../tenantContext.test.ts` | Any error is accepted instead of one exact message. |
 
-Each edit is marked with an `// eval:` comment. To see it in full, diff the file against the same path at the task's `replay.fix` commit in webiny-js.
+### Vague tasks
+
+The `-vague` tasks start from the files above and drop the assertions for requirements that only the precise ticket stated. Each change is marked with an `// eval-vague:` comment.
+
+| File | Change |
+|---|---|
+| `webiny-os-registries-vague/hidden/.../registriesPerRequest.test.ts` | Isolation from other requests and from the root is not checked. |
+| `webiny-sql-leak-vague/hidden/.../TableManager.test.ts` | The two concurrency tests and the same-object assertions are removed. The remaining test hides the test-runner environment variables (`NODE_ENV`, `VITEST`, `JEST_WORKER_ID` and others) while it counts registered managers, and counts only managers held by strong references. A fix that keeps the registry for tests only, or holds weak references, is not failed. |
+| `webiny-tenant-leak-vague/hidden/.../tenantContext.test.ts` | The test that `setTenant()` is refused inside a callback is removed. |
+| `webiny-flp-logging-vague/hidden/.../folder.flp.triggerFailures.test.ts` | The folder id in the log entry is not required. |
+
+`audit-logs-vague` and `model-cache-vague` use the same hidden tests as the precise tasks. Limits are the same as in the table above, except `sql-leak-vague`: 6 source files, and 1 test passed at minimum; `tenant-leak-vague`: 7 tests passed at minimum.
+
+Each edit to the precise tasks is marked with an `// eval:` comment. To see it in full, diff the file against the same path at the task's `replay.fix` commit in webiny-js.
 
 ## Running it again
 

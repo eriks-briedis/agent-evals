@@ -1,0 +1,153 @@
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..3428d030 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -48,6 +48,7 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
++        invoke: inner.invoke,
+         handler: () => inner.getContext<AuditLogsContext>()
+     };
+ };
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..580baa5a
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,88 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "./helpers/useHandler";
++import { AuditLogsContext } from "~/abstractions.js";
++
++const CREATE_FOLDER = /* GraphQL */ `
++    mutation CreateFolder($data: FolderCreateInput!) {
++        aco {
++            createFolder(data: $data) {
++                data {
++                    id
++                }
++                error {
++                    code
++                    message
++                }
++            }
++        }
++    }
++`;
++
++const LIST_AUDIT_LOGS = /* GraphQL */ `
++    query ListAuditLogs($where: ListAuditLogsWhere) {
++        auditLogs {
++            listAuditLogs(where: $where) {
++                data {
++                    id
++                    app
++                    entity
++                    entityId
++                    action
++                    message
++                }
++                error {
++                    code
++                    message
++                }
++            }
++        }
++    }
++`;
++
++const isSql = process.env.WEBINY_STORAGE?.includes("sql");
++
++describe.skipIf(isSql)("audit log subscriptions", () => {
++    it("should register the full request context as AuditLogsContext", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const registered = context.container.resolve(AuditLogsContext);
++        expect(registered.auditLogs).toBe(context.auditLogs);
++        expect(registered.container).toBeDefined();
++    });
++
++    it("should create an audit log when a domain event fires and list it via GraphQL", async () => {
++        const { invoke } = useHandler();
++
++        const [createResponse] = await invoke({
++            body: {
++                query: CREATE_FOLDER,
++                variables: {
++                    data: { title: "Files", slug: "files", type: "FmFile" }
++                }
++            }
++        });
++        const folder = createResponse.data.aco.createFolder;
++        expect(folder.error).toBeNull();
++
++        const [listResponse] = await invoke({
++            body: {
++                query: LIST_AUDIT_LOGS,
++                variables: { where: { entityId: folder.data.id } }
++            }
++        });
++
++        expect(listResponse.data.auditLogs.listAuditLogs).toMatchObject({
++            error: null,
++            data: [
++                {
++                    entityId: folder.data.id,
++                    app: "FILE_MANAGER",
++                    entity: "FILE_FOLDER",
++                    action: "CREATE",
++                    message: "Folder created"
++                }
++            ]
++        });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..62ce4370 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,9 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                // AuditLogsContext is the full request context (see abstractions.ts) — handlers
++                // read `.auditLogs` and `.container` from it, so register `ctx`, not the facade.
++                container.registerInstance(AuditLogsContext, ctx as AuditLogsContext.Interface);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..401aec60 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const { auditLogs } = context;
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +133,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const { auditLogs } = context;
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

@@ -1,0 +1,105 @@
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..d81e31ed 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -15,9 +15,13 @@ export class TableManager implements ITableManager {
+         this.knex = knex;
+         this.prefix = prefix ? `${prefix}_` : "";
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+-        managers.push(this);
++        // Test-only registry so suites can reset cached state; in production it would leak one
++        // instance per request.
++        if (process.env.NODE_ENV === "test") {
++            const g = globalThis as Record<string, unknown>;
++            const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
++            managers.push(this);
++        }
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts b/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
+index e29918e8..550f0c22 100644
+--- a/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
++++ b/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
+@@ -12,9 +12,13 @@ class SyncTableManagerImpl implements SyncTableManagerAbstraction.Interface {
+         this.knex = knex;
+         this.tableName = tableNameResolver.resolve("os_sync");
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as SyncTableManagerAbstraction.Interface[];
+-        managers.push(this);
++        // Test-only registry so suites can reset cached state; in production it would leak one
++        // instance per request.
++        if (process.env.NODE_ENV === "test") {
++            const g = globalThis as Record<string, unknown>;
++            const managers = (g.__sqlTableManagers ??= []) as SyncTableManagerAbstraction.Interface[];
++            managers.push(this);
++        }
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts b/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
+index de4aeac0..ac8bb5d2 100644
+--- a/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
++++ b/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
+@@ -12,9 +12,13 @@ class EntryTableManagerImpl implements EntryTableManagerAbstraction.Interface {
+         this.knex = knex;
+         this.tableName = tableNameResolver.resolve("entries");
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as EntryTableManagerAbstraction.Interface[];
+-        managers.push(this);
++        // Test-only registry so suites can reset cached state; in production it would leak one
++        // instance per request.
++        if (process.env.NODE_ENV === "test") {
++            const g = globalThis as Record<string, unknown>;
++            const managers = (g.__sqlTableManagers ??= []) as EntryTableManagerAbstraction.Interface[];
++            managers.push(this);
++        }
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts b/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
+index c8c6ccf0..cfbd0c86 100644
+--- a/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
++++ b/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
+@@ -8,9 +8,13 @@ class GroupSchemaManagerImpl implements GroupSchemaManagerAbstraction.Interface
+     constructor(knex: KnexClient.Interface) {
+         this.knex = knex;
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as GroupSchemaManagerAbstraction.Interface[];
+-        managers.push(this);
++        // Test-only registry so suites can reset cached state; in production it would leak one
++        // instance per request.
++        if (process.env.NODE_ENV === "test") {
++            const g = globalThis as Record<string, unknown>;
++            const managers = (g.__sqlTableManagers ??= []) as GroupSchemaManagerAbstraction.Interface[];
++            managers.push(this);
++        }
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts b/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
+index cbb5b4e9..705db590 100644
+--- a/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
++++ b/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
+@@ -8,9 +8,13 @@ class ModelSchemaManagerImpl implements ModelSchemaManagerAbstraction.Interface
+     constructor(knex: KnexClient.Interface) {
+         this.knex = knex;
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ModelSchemaManagerAbstraction.Interface[];
+-        managers.push(this);
++        // Test-only registry so suites can reset cached state; in production it would leak one
++        // instance per request.
++        if (process.env.NODE_ENV === "test") {
++            const g = globalThis as Record<string, unknown>;
++            const managers = (g.__sqlTableManagers ??= []) as ModelSchemaManagerAbstraction.Interface[];
++            managers.push(this);
++        }
+     }
+ 
+     public reset(): void {

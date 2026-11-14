@@ -1,0 +1,168 @@
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..261725b9 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -48,6 +48,8 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
++        invoke: inner.invoke,
++        invokeCms: inner.invokeCms,
+         handler: () => inner.getContext<AuditLogsContext>()
+     };
+ };
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..a9206ae0
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,100 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "./helpers/useHandler";
++
++const LIST_AUDIT_LOGS = /* GraphQL */ `
++    query ListAuditLogs($where: ListAuditLogsWhere!) {
++        auditLogs {
++            listAuditLogs(where: $where, limit: 100) {
++                data {
++                    id
++                    app
++                    entity
++                    action
++                    entityId
++                    message
++                }
++                error {
++                    code
++                    message
++                }
++            }
++        }
++    }
++`;
++
++const ERROR = `error { code message data }`;
++
++describe("audit logs written by event subscriptions", () => {
++    it("should write audit logs for role, CMS group, model and entry changes and list them via GraphQL", async () => {
++        const { invoke, invokeCms } = useHandler();
++
++        const [role] = await invoke({
++            body: {
++                query: `mutation { security { createRole(data: { name: "Editors", slug: "editors", description: "", permissions: [] }) { data { id } ${ERROR} } } }`
++            }
++        });
++        expect(role.errors).toBeUndefined();
++        expect(role.data.security.createRole.error).toBeNull();
++
++        const [group] = await invokeCms({
++            body: {
++                query: `mutation { createContentModelGroup(data: { name: "Group", slug: "group", icon: "fas/star" }) { data { id slug } ${ERROR} } }`
++            }
++        });
++        expect(group.data.createContentModelGroup.error).toBeNull();
++
++        const [model] = await invokeCms({
++            body: {
++                query: `mutation ($data: CmsContentModelCreateInput!) { createContentModel(data: $data) { data { modelId } ${ERROR} } }`,
++                variables: {
++                    data: {
++                        name: "Article",
++                        modelId: "article",
++                        singularApiName: "Article",
++                        pluralApiName: "Articles",
++                        group: group.data.createContentModelGroup.data.id,
++                        fields: [
++                            {
++                                id: "title",
++                                fieldId: "title",
++                                type: "text",
++                                label: "Title",
++                                renderer: { name: "text-input" }
++                            }
++                        ],
++                        layout: [["title"]],
++                        titleFieldId: "title"
++                    }
++                }
++            }
++        });
++        expect(model.data.createContentModel.error).toBeNull();
++
++        const [entry] = await invokeCms({
++            body: {
++                query: `mutation { createArticle(data: { values: { title: "Hello" } }) { data { id entryId } ${ERROR} } }`
++            }
++        });
++        expect(entry.errors).toBeUndefined();
++        expect(entry.data.createArticle.error).toBeNull();
++
++        const [list] = await invoke({
++            body: { query: LIST_AUDIT_LOGS, variables: { where: {} } }
++        });
++        expect(list.errors).toBeUndefined();
++        expect(list.data.auditLogs.listAuditLogs.error).toBeNull();
++
++        const actions = list.data.auditLogs.listAuditLogs.data.map(
++            (item: { app: string; entity: string; action: string }) =>
++                `${item.app}.${item.entity}.${item.action}`
++        );
++        expect(actions).toEqual(
++            expect.arrayContaining([
++                "SECURITY.ROLE.CREATE",
++                "HEADLESS_CMS.GROUP.CREATE",
++                "HEADLESS_CMS.MODEL.CREATE",
++                "HEADLESS_CMS.ENTRY.CREATE"
++            ])
++        );
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..284973a0 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,9 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                // The AuditLogsContext token is the full request context (see abstractions.ts) — event
++                // handlers read `.auditLogs` and `.container` from it.
++                container.registerInstance(AuditLogsContext, ctx as AuditLogsContext.Interface);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..8fce49bc 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,8 +108,9 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
++                    const { auditLogs } = context;
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+ 
+@@ -133,8 +133,9 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
++                    const { auditLogs } = context;
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);
+                         if (!validation.success) {

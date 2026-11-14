@@ -1,0 +1,44 @@
+diff --git a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+index 9737551f..af2d9a07 100644
+--- a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
++++ b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+@@ -19,7 +19,7 @@ export const AuditLogsDdbFeature = createFeature({
+             const compressionHandler = container.resolve(CompressionHandler);
+             return createStorage({
+                 client: db.client,
+-                tableName: config.tableName ?? process.env.DB_TABLE,
++                tableName: config.tableName ?? process.env.DB_TABLE_AUDIT_LOGS,
+                 compressionHandler
+             });
+         });
+diff --git a/packages/api-audit-logs-ddb/src/entity.ts b/packages/api-audit-logs-ddb/src/entity.ts
+index 36eeb2f3..a7d90fd9 100644
+--- a/packages/api-audit-logs-ddb/src/entity.ts
++++ b/packages/api-audit-logs-ddb/src/entity.ts
+@@ -153,6 +153,13 @@ export const createEntity = (params: ICreateEntityParams): ICreateEntityResult =
+                 type: "number",
+                 required: true
+             },
++            TYPE: {
++                type: "string",
++                required: true
++            },
++            expiresAt: {
++                type: "number"
++            },
+             data: {
+                 type: "map",
+                 required: true
+diff --git a/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts b/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts
+index 598dc9d4..b329db73 100644
+--- a/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts
++++ b/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts
+@@ -11,7 +11,7 @@ class AuditLogFolderAfterDeleteHandlerImpl implements FolderAfterDeleteEventHand
+         try {
+             const { folder } = event.payload;
+             if (folder.type === "PbPage") {
+-                const createAuditLog = getAuditConfig(AUDIT.PAGE_BUILDER.PAGE_FOLDER.DELETE);
++                const createAuditLog = getAuditConfig(AUDIT.PAGE_BUILDER?.PAGE_FOLDER?.DELETE);
+                 await createAuditLog("Folder deleted", folder, folder.id, this.context);
+             } else if (folder.type === "FmFile") {
+                 const createAuditLog = getAuditConfig(AUDIT.FILE_MANAGER.FILE_FOLDER.DELETE);

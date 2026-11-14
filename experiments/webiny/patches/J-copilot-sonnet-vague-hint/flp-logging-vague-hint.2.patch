@@ -1,0 +1,380 @@
+diff --git a/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts b/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts
+index bae948e4..f27165f1 100644
+--- a/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts
++++ b/packages/api-aco/src/features/flp/CreateFlpOnFolderCreated/CreateFlpOnFolderCreatedHandler.ts
+@@ -2,6 +2,7 @@ import { FolderAfterCreateEventHandler } from "~/features/folder/CreateFolder/ab
+ import type { FolderAfterCreateEvent } from "~/features/folder/CreateFolder/events.js";
+ import type { ICreateFlpTaskInput } from "~/types.js";
+ import { CREATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
+ import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/abstractions.js";
+ 
+@@ -12,25 +13,35 @@ import { IdentityContext } from "@webiny/api-core/features/security/IdentityCont
+ class CreateFlpOnFolderCreatedHandlerImpl implements FolderAfterCreateEventHandler.Interface {
+     constructor(
+         private identityContext: IdentityContext.Interface,
+-        private tasks: TaskService.Interface
++        private tasks: TaskService.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
+     async handle(event: FolderAfterCreateEvent): Promise<void> {
+         const { folder } = event.payload;
+ 
+         try {
+-            await this.tasks.trigger<ICreateFlpTaskInput>({
++            const result = await this.tasks.trigger<ICreateFlpTaskInput>({
+                 definition: CREATE_FLP_TASK_ID,
+                 // Nobody to tell when there is no identity, as in some system calls.
+                 input: { folder, notifyIdentityId: this.identityContext.getIdentity()?.id }
+             });
+-        } catch {
+-            // Ignore errors
++            if (result.isFail()) {
++                this.logger.error(
++                    { error: result.error, folderId: folder.id, folderType: folder.type },
++                    "Could not trigger the create FLP task. The folder change went through, but its permissions were not synchronized."
++                );
++            }
++        } catch (error) {
++            this.logger.error(
++                { error, folderId: folder.id, folderType: folder.type },
++                "Could not trigger the create FLP task. The folder change went through, but its permissions were not synchronized."
++            );
+         }
+     }
+ }
+ 
+ export const CreateFlpOnFolderCreatedHandler = FolderAfterCreateEventHandler.createImplementation({
+     implementation: CreateFlpOnFolderCreatedHandlerImpl,
+-    dependencies: [IdentityContext, TaskService]
++    dependencies: [IdentityContext, TaskService, Logger]
+ });
+diff --git a/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts b/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts
+index d9083ec1..7db770ab 100644
+--- a/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts
++++ b/packages/api-aco/src/features/flp/DeleteFlpOnFolderDeleted/DeleteFlpOnFolderDeletedHandler.ts
+@@ -2,26 +2,39 @@ import { FolderAfterDeleteEventHandler } from "~/features/folder/DeleteFolder/ab
+ import type { FolderAfterDeleteEvent } from "~/features/folder/DeleteFolder/events.js";
+ import type { IDeleteFlpTaskInput } from "~/types.js";
+ import { DELETE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
+ 
+ class DeleteFlpOnFolderDeletedHandlerImpl implements FolderAfterDeleteEventHandler.Interface {
+-    constructor(private tasks: TaskService.Interface) {}
++    constructor(
++        private tasks: TaskService.Interface,
++        private logger: Logger.Interface
++    ) {}
+ 
+     async handle(event: FolderAfterDeleteEvent): Promise<void> {
+         const { folder } = event.payload;
+ 
+         try {
+-            await this.tasks.trigger<IDeleteFlpTaskInput>({
++            const result = await this.tasks.trigger<IDeleteFlpTaskInput>({
+                 definition: DELETE_FLP_TASK_ID,
+                 input: { folder }
+             });
+-        } catch {
+-            // Ignore errors
++            if (result.isFail()) {
++                this.logger.error(
++                    { error: result.error, folderId: folder.id, folderType: folder.type },
++                    "Could not trigger the delete FLP task. The folder change went through, but its permissions were not synchronized."
++                );
++            }
++        } catch (error) {
++            this.logger.error(
++                { error, folderId: folder.id, folderType: folder.type },
++                "Could not trigger the delete FLP task. The folder change went through, but its permissions were not synchronized."
++            );
+         }
+     }
+ }
+ 
+ export const DeleteFlpOnFolderDeletedHandler = FolderAfterDeleteEventHandler.createImplementation({
+     implementation: DeleteFlpOnFolderDeletedHandlerImpl,
+-    dependencies: [TaskService]
++    dependencies: [TaskService, Logger]
+ });
+diff --git a/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts b/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts
+index 1779cddf..aad202d3 100644
+--- a/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts
++++ b/packages/api-aco/src/features/flp/UpdateFlpOnFolderUpdated/UpdateFlpOnFolderUpdatedHandler.ts
+@@ -1,3 +1,4 @@
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { TaskService } from "@webiny/api-core/features/task/TaskService/index.js";
+ import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/abstractions.js";
+ import type { FolderAfterUpdateEvent } from "~/features/folder/UpdateFolder/events.js";
+@@ -13,25 +14,35 @@ import { FolderAfterUpdateEventHandler } from "~/features/folder/UpdateFolder/in
+ class UpdateFlpOnFolderUpdatedHandlerImpl implements FolderAfterUpdateEventHandler.Interface {
+     constructor(
+         private identityContext: IdentityContext.Interface,
+-        private tasks: TaskService.Interface
++        private tasks: TaskService.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
+     async handle(event: FolderAfterUpdateEvent): Promise<void> {
+         const { folder } = event.payload;
+ 
+         try {
+-            await this.tasks.trigger<IUpdateFlpTaskInput>({
++            const result = await this.tasks.trigger<IUpdateFlpTaskInput>({
+                 definition: UPDATE_FLP_TASK_ID,
+                 // Nobody to tell when there is no identity, as in some system calls.
+                 input: { folder, notifyIdentityId: this.identityContext.getIdentity()?.id }
+             });
+-        } catch {
+-            // Ignore errors
++            if (result.isFail()) {
++                this.logger.error(
++                    { error: result.error, folderId: folder.id, folderType: folder.type },
++                    "Could not trigger the update FLP task. The folder change went through, but its permissions were not synchronized."
++                );
++            }
++        } catch (error) {
++            this.logger.error(
++                { error, folderId: folder.id, folderType: folder.type },
++                "Could not trigger the update FLP task. The folder change went through, but its permissions were not synchronized."
++            );
+         }
+     }
+ }
+ 
+ export const UpdateFlpOnFolderUpdatedHandler = FolderAfterUpdateEventHandler.createImplementation({
+     implementation: UpdateFlpOnFolderUpdatedHandlerImpl,
+-    dependencies: [IdentityContext, TaskService]
++    dependencies: [IdentityContext, TaskService, Logger]
+ });
+diff --git a/packages/api-aco/src/flp/tasks/createFlp.task.ts b/packages/api-aco/src/flp/tasks/createFlp.task.ts
+index b3c575d3..49ba09aa 100644
+--- a/packages/api-aco/src/flp/tasks/createFlp.task.ts
++++ b/packages/api-aco/src/flp/tasks/createFlp.task.ts
+@@ -3,14 +3,17 @@ import {
+     TaskHandler
+ } from "@webiny/api-core/features/task/TaskDefinition/index.js";
+ import { CREATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { type ICreateFlpTaskInput } from "~/types.js";
+ import { CreateFlpUseCase } from "~/features/flp/CreateFlp/index.js";
+ import { NotifyFolderChangeUseCase } from "~/features/folder/NotifyFolderChange/index.js";
+ 
+ class CreateFlpTaskHandlerImpl implements TaskHandler.Interface<ICreateFlpTaskInput> {
+     constructor(
++
+         private createFlp: CreateFlpUseCase.Interface,
+-        private notifyFolderChange: NotifyFolderChangeUseCase.Interface
++        private notifyFolderChange: NotifyFolderChangeUseCase.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
+     async run({ input, controller }: TaskHandler.RunParams<ICreateFlpTaskInput>) {
+@@ -36,6 +39,10 @@ class CreateFlpTaskHandlerImpl implements TaskHandler.Interface<ICreateFlpTaskIn
+ 
+             return controller.response.done("Task done: FLP record created.");
+         } catch (error) {
++            this.logger.error(
++                { error, input },
++                "The create FLP task failed. Folder permissions may be out of date."
++            );
+             return controller.response.error(error);
+         }
+     }
+@@ -43,7 +50,7 @@ class CreateFlpTaskHandlerImpl implements TaskHandler.Interface<ICreateFlpTaskIn
+ 
+ const CreateFlpTaskHandler = TaskHandler.createImplementation({
+     implementation: CreateFlpTaskHandlerImpl,
+-    dependencies: [CreateFlpUseCase, NotifyFolderChangeUseCase]
++    dependencies: [CreateFlpUseCase, NotifyFolderChangeUseCase, Logger]
+ });
+ 
+ class CreateFlpTaskImpl implements TaskDefinition.Interface {
+diff --git a/packages/api-aco/src/flp/tasks/deleteFlp.task.ts b/packages/api-aco/src/flp/tasks/deleteFlp.task.ts
+index 60e585a8..7ea8f4a9 100644
+--- a/packages/api-aco/src/flp/tasks/deleteFlp.task.ts
++++ b/packages/api-aco/src/flp/tasks/deleteFlp.task.ts
+@@ -3,11 +3,15 @@ import {
+     TaskHandler
+ } from "@webiny/api-core/features/task/TaskDefinition/index.js";
+ import { DELETE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { type IDeleteFlpTaskInput } from "~/types.js";
+ import { DeleteFlpUseCase } from "~/features/flp/DeleteFlp/index.js";
+ 
+ class DeleteFlpTaskHandlerImpl implements TaskHandler.Interface<IDeleteFlpTaskInput> {
+-    constructor(private deleteFlp: DeleteFlpUseCase.Interface) {}
++    constructor(
++        private deleteFlp: DeleteFlpUseCase.Interface,
++        private logger: Logger.Interface
++    ) {}
+ 
+     async run({ input, controller }: TaskHandler.RunParams<IDeleteFlpTaskInput>) {
+         try {
+@@ -23,6 +27,10 @@ class DeleteFlpTaskHandlerImpl implements TaskHandler.Interface<IDeleteFlpTaskIn
+ 
+             return controller.response.done("Task done: FLP record deleted.");
+         } catch (error) {
++            this.logger.error(
++                { error, input },
++                "The delete FLP task failed. Folder permissions may be out of date."
++            );
+             return controller.response.error(error);
+         }
+     }
+@@ -30,7 +38,7 @@ class DeleteFlpTaskHandlerImpl implements TaskHandler.Interface<IDeleteFlpTaskIn
+ 
+ const DeleteFlpTaskHandler = TaskHandler.createImplementation({
+     implementation: DeleteFlpTaskHandlerImpl,
+-    dependencies: [DeleteFlpUseCase]
++    dependencies: [DeleteFlpUseCase, Logger]
+ });
+ 
+ class DeleteFlpTaskImpl implements TaskDefinition.Interface {
+diff --git a/packages/api-aco/src/flp/tasks/syncFlp.task.ts b/packages/api-aco/src/flp/tasks/syncFlp.task.ts
+index fa9debeb..598adfd1 100644
+--- a/packages/api-aco/src/flp/tasks/syncFlp.task.ts
++++ b/packages/api-aco/src/flp/tasks/syncFlp.task.ts
+@@ -4,6 +4,7 @@ import {
+ } from "@webiny/api-core/features/task/TaskDefinition/index.js";
+ import { ListModelsUseCase } from "@webiny/api-headless-cms/features/contentModel/ListModels/index.js";
+ import { SYNC_FLP_TASK_ID, UPDATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { type ISyncFlpTaskInput, type IUpdateFlpTaskInput } from "~/types.js";
+ import { FM_FILE_TYPE } from "~/constants.js";
+ import { GetFolderUseCase } from "~/features/folder/GetFolder/index.js";
+@@ -13,9 +14,22 @@ class SyncFlpTaskHandlerImpl implements TaskHandler.Interface<ISyncFlpTaskInput>
+     public constructor(
+         private getFolder: GetFolderUseCase.Interface,
+         private listFolders: ListFoldersUseCase.Interface,
+-        private listModels: ListModelsUseCase.Interface
++        private listModels: ListModelsUseCase.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
++    private logTriggerFailure(
++        result: { isFail(): boolean; error?: unknown },
++        input: ISyncFlpTaskInput
++    ) {
++        if (result.isFail()) {
++            this.logger.error(
++                { error: result.error, input },
++                "Could not trigger the update FLP task from the sync FLP task. Folder permissions may be out of date."
++            );
++        }
++    }
++
+     async run({ input, controller }: TaskHandler.RunParams<ISyncFlpTaskInput>) {
+         try {
+             if (controller.runtime.isAborted()) {
+@@ -34,12 +48,13 @@ class SyncFlpTaskHandlerImpl implements TaskHandler.Interface<ISyncFlpTaskInput>
+                 }
+                 const folder = result.value;
+ 
+-                await controller.task.trigger<IUpdateFlpTaskInput>({
++                const triggerResult = await controller.task.trigger<IUpdateFlpTaskInput>({
+                     definition: UPDATE_FLP_TASK_ID,
+                     input: {
+                         folder
+                     }
+                 });
++                this.logTriggerFailure(triggerResult, input);
+ 
+                 return controller.response.done(
+                     `Task completed successfully: all FLP records for folderId "${input.folderId}" and its children have been queued to be synchronized.`
+@@ -87,12 +102,13 @@ class SyncFlpTaskHandlerImpl implements TaskHandler.Interface<ISyncFlpTaskInput>
+                     const { folders } = result.value;
+ 
+                     for (const folder of folders) {
+-                        await controller.task.trigger<IUpdateFlpTaskInput>({
++                        const triggerResult = await controller.task.trigger<IUpdateFlpTaskInput>({
+                             definition: UPDATE_FLP_TASK_ID,
+                             input: {
+                                 folder
+                             }
+                         });
++                        this.logTriggerFailure(triggerResult, input);
+                     }
+ 
+                     await controller.logger.info({
+@@ -128,12 +144,13 @@ class SyncFlpTaskHandlerImpl implements TaskHandler.Interface<ISyncFlpTaskInput>
+                 const { folders } = result.value;
+ 
+                 for (const folder of folders) {
+-                    await controller.task.trigger<IUpdateFlpTaskInput>({
++                    const triggerResult = await controller.task.trigger<IUpdateFlpTaskInput>({
+                         definition: UPDATE_FLP_TASK_ID,
+                         input: {
+                             folder
+                         }
+                     });
++                    this.logTriggerFailure(triggerResult, input);
+                 }
+ 
+                 return controller.response.done(
+@@ -145,6 +162,10 @@ class SyncFlpTaskHandlerImpl implements TaskHandler.Interface<ISyncFlpTaskInput>
+                 "Invalid input: please provide either `type` or `folderId`."
+             );
+         } catch (error) {
++            this.logger.error(
++                { error, input },
++                "The sync FLP task failed. Folder permissions may be out of date."
++            );
+             return controller.response.error(error);
+         }
+     }
+@@ -152,7 +173,7 @@ class SyncFlpTaskHandlerImpl implements TaskHandler.Interface<ISyncFlpTaskInput>
+ 
+ const SyncFlpTaskHandler = TaskHandler.createImplementation({
+     implementation: SyncFlpTaskHandlerImpl,
+-    dependencies: [GetFolderUseCase, ListFoldersUseCase, ListModelsUseCase]
++    dependencies: [GetFolderUseCase, ListFoldersUseCase, ListModelsUseCase, Logger]
+ });
+ 
+ class SyncFlpTaskImpl implements TaskDefinition.Interface {
+diff --git a/packages/api-aco/src/flp/tasks/updateFlp.task.ts b/packages/api-aco/src/flp/tasks/updateFlp.task.ts
+index 76933996..2d8b1a58 100644
+--- a/packages/api-aco/src/flp/tasks/updateFlp.task.ts
++++ b/packages/api-aco/src/flp/tasks/updateFlp.task.ts
+@@ -3,14 +3,17 @@ import {
+     TaskHandler
+ } from "@webiny/api-core/features/task/TaskDefinition/index.js";
+ import { UPDATE_FLP_TASK_ID } from "~/flp/tasks/index.js";
++import { Logger } from "@webiny/api-core/features/logger/index.js";
+ import { type IUpdateFlpTaskInput } from "~/types.js";
+ import { UpdateFlpUseCase } from "~/features/flp/UpdateFlp/index.js";
+ import { NotifyFolderChangeUseCase } from "~/features/folder/NotifyFolderChange/index.js";
+ 
+ class UpdateFlpTaskHandlerImpl implements TaskHandler.Interface<IUpdateFlpTaskInput> {
+     public constructor(
++
+         private updateFlp: UpdateFlpUseCase.Interface,
+-        private notifyFolderChange: NotifyFolderChangeUseCase.Interface
++        private notifyFolderChange: NotifyFolderChangeUseCase.Interface,
++        private logger: Logger.Interface
+     ) {}
+ 
+     async run({ input, controller }: TaskHandler.RunParams<IUpdateFlpTaskInput>) {
+@@ -50,6 +53,10 @@ class UpdateFlpTaskHandlerImpl implements TaskHandler.Interface<IUpdateFlpTaskIn
+ 
+             return controller.response.done("Task done: FLP record updated.");
+         } catch (error) {
++            this.logger.error(
++                { error, input },
++                "The update FLP task failed. Folder permissions may be out of date."
++            );
+             return controller.response.error(error);
+         }
+     }
+@@ -57,7 +64,7 @@ class UpdateFlpTaskHandlerImpl implements TaskHandler.Interface<IUpdateFlpTaskIn
+ 
+ const UpdateFlpTaskHandler = TaskHandler.createImplementation({
+     implementation: UpdateFlpTaskHandlerImpl,
+-    dependencies: [UpdateFlpUseCase, NotifyFolderChangeUseCase]
++    dependencies: [UpdateFlpUseCase, NotifyFolderChangeUseCase, Logger]
+ });
+ 
+ class UpdateFlpTaskImpl implements TaskDefinition.Interface {

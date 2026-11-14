@@ -1,0 +1,54 @@
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..b5565638 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -19,21 +19,21 @@ import { NotStartsWith } from "./operators/NotStartsWith.js";
+ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+     name: "opensearch.internal.queryBuilderOperator",
+     register(container) {
+-        container.register(Equal).inSingletonScope();
+-        container.register(Not).inSingletonScope();
+-        container.register(Contains).inSingletonScope();
+-        container.register(NotContains).inSingletonScope();
+-        container.register(Between).inSingletonScope();
+-        container.register(NotBetween).inSingletonScope();
+-        container.register(GreaterThan).inSingletonScope();
+-        container.register(GreaterThanOrEqual).inSingletonScope();
+-        container.register(LesserThan).inSingletonScope();
+-        container.register(LesserThanOrEqual).inSingletonScope();
+-        container.register(In).inSingletonScope();
+-        container.register(AndIn).inSingletonScope();
+-        container.register(NotIn).inSingletonScope();
+-        container.register(StartsWith).inSingletonScope();
+-        container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(Equal).inContainerScope();
++        container.register(Not).inContainerScope();
++        container.register(Contains).inContainerScope();
++        container.register(NotContains).inContainerScope();
++        container.register(Between).inContainerScope();
++        container.register(NotBetween).inContainerScope();
++        container.register(GreaterThan).inContainerScope();
++        container.register(GreaterThanOrEqual).inContainerScope();
++        container.register(LesserThan).inContainerScope();
++        container.register(LesserThanOrEqual).inContainerScope();
++        container.register(In).inContainerScope();
++        container.register(AndIn).inContainerScope();
++        container.register(NotIn).inContainerScope();
++        container.register(StartsWith).inContainerScope();
++        container.register(NotStartsWith).inContainerScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });

@@ -1,0 +1,119 @@
+diff --git a/packages/api-audit-logs/__tests__/eventSubscriptions.test.ts b/packages/api-audit-logs/__tests__/eventSubscriptions.test.ts
+new file mode 100644
+index 00000000..168604b1
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/eventSubscriptions.test.ts
+@@ -0,0 +1,52 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "~tests/helpers/useHandler.js";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { UserAfterUpdateEvent } from "@webiny/api-core/features/users/UpdateUser/index.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++
++const isSql = process.env.WEBINY_STORAGE?.includes("sql");
++
++describe.skipIf(isSql)("audit logs created from domain events", () => {
++    const publish = async (event: any) => {
++        const { handler } = useHandler();
++        const context = await handler();
++        await context.container.resolve(EventPublisher).publish(event);
++        return context;
++    };
++
++    const list = async (context: any) => {
++        const result = await context.auditLogs.listAuditLogs({ limit: 50, sort: "DESC" });
++        return result.items;
++    };
++
++    it("user update is logged", async () => {
++        const context = await publish(
++            new UserAfterUpdateEvent({
++                originalUser: { id: "u1", email: "a@a.com" },
++                updatedUser: { id: "u1", email: "b@a.com" }
++            } as any)
++        );
++        const items = await list(context);
++        expect(items.map((i: any) => i.entityId)).toContain("u1");
++    });
++
++    it("file create is logged", async () => {
++        const context = await publish(
++            new FileAfterCreateEvent({ file: { id: "f1", name: "x.png" } } as any)
++        );
++        const items = await list(context);
++        expect(items.map((i: any) => i.entityId)).toContain("f1");
++    });
++
++    it("cms entry create is logged", async () => {
++        const context = await publish(
++            new EntryAfterCreateEvent({
++                model: { isPrivate: false, modelId: "m" },
++                entry: { id: "e1#0001", entryId: "e1" }
++            } as any)
++        );
++        const items = await list(context);
++        expect(items.map((i: any) => i.entityId)).toContain("e1");
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..9a3b2071 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,7 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
++import type { AuditLogsContext as AuditLogsContextType } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +109,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContextType) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -118,7 +118,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+                             throw createZodError(validation.error);
+                         }
+ 
+-                        const result = await auditLogs.getAuditLog(validation.data.id);
++                        const result = await context.auditLogs.getAuditLog(validation.data.id);
+                         if (!result) {
+                             throw new NotFoundError(
+                                 `Audit log with id "${validation.data.id}" not found.`
+@@ -133,14 +133,14 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContextType) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);
+                         if (!validation.success) {
+                             throw createZodError(validation.error);
+                         }
+-                        const result = await auditLogs.listAuditLogs({
++                        const result = await context.auditLogs.listAuditLogs({
+                             ...validation.data,
+                             ...validation.data.where
+                         });

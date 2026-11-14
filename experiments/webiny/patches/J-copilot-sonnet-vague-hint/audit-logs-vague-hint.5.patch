@@ -1,0 +1,83 @@
+diff --git a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+index 9737551f..af2d9a07 100644
+--- a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
++++ b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+@@ -19,7 +19,7 @@ export const AuditLogsDdbFeature = createFeature({
+             const compressionHandler = container.resolve(CompressionHandler);
+             return createStorage({
+                 client: db.client,
+-                tableName: config.tableName ?? process.env.DB_TABLE,
++                tableName: config.tableName ?? process.env.DB_TABLE_AUDIT_LOGS,
+                 compressionHandler
+             });
+         });
+diff --git a/packages/api-audit-logs/__tests__/eventHandlers.test.ts b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+new file mode 100644
+index 00000000..7ff57d12
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+@@ -0,0 +1,23 @@
++import { describe, expect, it } from "vitest";
++import { CreateFolderUseCase } from "@webiny/api-aco/features/folder/CreateFolder/index.js";
++import { useHandler } from "./helpers/useHandler";
++
++describe("audit logs created by event handlers", () => {
++    it("should create an audit log when a folder is created", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const useCase = context.container.resolve(CreateFolderUseCase);
++        const result = await useCase.execute({
++            title: "Audited folder",
++            slug: "audited-folder",
++            type: "FmFile",
++            parentId: null
++        } as any);
++        expect(result.isOk()).toBe(true);
++
++        const list = await context.auditLogs.listAuditLogs({});
++        expect(list.items).toHaveLength(1);
++        expect(list.items[0]).toMatchObject({ message: "Folder created" });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..be12cb99 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -109,9 +109,10 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
++                        const auditLogs: AuditLogsContextValue = context.auditLogs;
+                         const validation = await getValidationSchema.safeParseAsync(args);
+ 
+                         if (!validation.success) {
+@@ -133,9 +134,10 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
++                        const auditLogs: AuditLogsContextValue = context.auditLogs;
+                         const validation = await listValidationSchema.safeParseAsync(args);
+                         if (!validation.success) {
+                             throw createZodError(validation.error);

@@ -1,0 +1,58 @@
+$ build -p @webiny/api-audit-logs-ddb (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-audit-logs-ddb
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.05s
+
+27 files generated in dist, total: 27.0 kB (9.7 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 0.595s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ build -p @webiny/api-audit-logs (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-audit-logs
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.07s
+
+77 files generated in dist, total: 96.5 kB (36.1 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 0.915s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-audit-logs/__tests__/cmsEntryAuditLogs.test.ts (exit 0)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v4.1.11 <work>/webiny-audit-logs-vague-hint-0xPvTw
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  13:30:05
+   Duration  6.44s (transform 4.19s, setup 4.42s, import 1.61s, tests 315ms, environment 0ms)
+

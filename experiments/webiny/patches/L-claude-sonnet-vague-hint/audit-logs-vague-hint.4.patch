@@ -1,0 +1,110 @@
+diff --git a/packages/api-audit-logs/__tests__/eventHandlers.test.ts b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+new file mode 100644
+index 00000000..6e15d137
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+@@ -0,0 +1,35 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "./helpers/useHandler";
++import { CreateGroupUseCase } from "@webiny/api-headless-cms/features/contentModelGroup/CreateGroup/index.js";
++import { CreateRoleUseCase } from "@webiny/api-core/features/security/roles/CreateRole/index.js";
++
++const isSql = process.env.WEBINY_STORAGE?.includes("sql");
++
++describe.skipIf(isSql)("audit logs created from domain events", () => {
++    it("should create audit logs when roles and groups are created", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++        const { container } = context;
++
++        const group = await container.resolve(CreateGroupUseCase).execute({
++            name: "G1",
++            slug: "g1",
++            icon: { type: "icon", name: "star", value: "fas/star" },
++            description: ""
++        });
++        expect(group.isOk()).toBe(true);
++
++        const role = await container.resolve(CreateRoleUseCase).execute({
++            name: "Role1",
++            slug: "role1",
++            description: "desc",
++            permissions: []
++        });
++        expect(role.isOk()).toBe(true);
++
++        const result = await context.auditLogs.listAuditLogs({ limit: 50, sort: "DESC" });
++        const logs = result.items.map(item => `${item.app}/${item.entity}/${item.action}`);
++        expect(logs).toContain("SECURITY/ROLE/CREATE");
++        expect(logs).toContain("HEADLESS_CMS/GROUP/CREATE");
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..053e0c87 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -109,7 +109,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs: AuditLogsContextValue = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +134,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const auditLogs: AuditLogsContextValue = context.auditLogs;
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);
+diff --git a/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts b/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts
+index 598dc9d4..ed6edaf8 100644
+--- a/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts
++++ b/packages/api-audit-logs/src/subscriptions/aco/handlers/AuditLogFolderAfterDeleteHandler.ts
+@@ -10,10 +10,8 @@ class AuditLogFolderAfterDeleteHandlerImpl implements FolderAfterDeleteEventHand
+     async handle(event: FolderAfterDeleteEventHandler.Event): Promise<void> {
+         try {
+             const { folder } = event.payload;
+-            if (folder.type === "PbPage") {
+-                const createAuditLog = getAuditConfig(AUDIT.PAGE_BUILDER.PAGE_FOLDER.DELETE);
+-                await createAuditLog("Folder deleted", folder, folder.id, this.context);
+-            } else if (folder.type === "FmFile") {
++            // Legacy "PbPage" folders have no audit action defined, so they are not logged.
++            if (folder.type === "FmFile") {
+                 const createAuditLog = getAuditConfig(AUDIT.FILE_MANAGER.FILE_FOLDER.DELETE);
+                 await createAuditLog("Folder deleted", folder, folder.id, this.context);
+             } else if (folder.type.startsWith("cms:")) {
+diff --git a/packages/api-audit-logs/src/utils/getAuditConfig.ts b/packages/api-audit-logs/src/utils/getAuditConfig.ts
+index 890eee33..68772a43 100644
+--- a/packages/api-audit-logs/src/utils/getAuditConfig.ts
++++ b/packages/api-audit-logs/src/utils/getAuditConfig.ts
+@@ -116,8 +116,8 @@ export const getAuditConfig = (audit: AuditAction) => {
+                         payload,
+                         delay
+                     });
+-                } catch {
+-                    // Don't care at this point!
++                } catch (error) {
++                    console.error("Could not create or merge audit log.", error);
+                 }
+                 return null;
+             }

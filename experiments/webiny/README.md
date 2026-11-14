@@ -2,6 +2,8 @@
 
 By Eriks Briedis, November 2026. 108 agent sessions on six real bug fixes from [webiny/webiny-js](https://github.com/webiny/webiny-js), run with the runner in [`harness/`](harness/README.md). Per-session data: [`sessions.csv`](sessions.csv). The code each agent wrote: [`patches/`](patches/). What the grader recorded: [`grading/`](grading/README.md).
 
+A follow-up of 154 sessions gave the agents the same bugs with [vague tickets](#vague-tickets). Its data is in [`sessions-vague.csv`](sessions-vague.csv).
+
 ![Copilot CLI and Claude Code on the same model](same-model-tie.png)
 
 ## Question
@@ -80,9 +82,126 @@ Pass count, then median tool calls.
 
 The images are generated from `sessions.csv` by [`make-images.mjs`](make-images.mjs).
 
+## Vague tickets
+
+Every row above passes 17 or 18 of 18, so the tasks as first written separate nothing on pass rate. The tickets were the likely reason: they name the affected class, the failing case or the expected behaviour. This follow-up keeps the six bugs and rewrites each ticket as a user would report it, with symptoms only. The full texts are [below](#vague-ticket-texts).
+
+- **Same:** starting commits, repo notes, agents, versions and size limits. No wiki.
+- **Hidden tests:** assertions for requirements that only the precise ticket stated were removed, and one test was rewritten after review. See [Hidden tests and review](#hidden-tests-and-review).
+- **Limits:** unchanged, except `sql-leak`, which allows 6 source files instead of 5.
+- **Sessions:** 154, in rows G to N.
+
+### All six tasks, three attempts each
+
+Medians per session, 18 sessions per row. "Tests" is sessions where the hidden tests pass. "In scope" is sessions within the size and file limits. A session passes when both hold.
+
+| Row | Agent | Model | Tests | In scope | Pass | Pass, precise ticket | Tool calls | Seconds | Cost per session |
+|---|---|---|---|---|---|---|---|---|---|
+| G | Claude Code | Sonnet 5.5 | 15/18 | 17/18 | 15/18 | 18/18 | 15 | 100 | $0.20 |
+| H | Copilot CLI | Sonnet 5.5, pinned | 14/18 | 18/18 | 14/18 | 18/18 | 13.5 | 71.5 | 13.1 credits |
+| I | Copilot CLI | Auto | 18/18 | 17/18 | 17/18 | 17/18 | 99 | 205.5 | 10.6 credits |
+| M | Claude Code | Opus 5.5 | 18/18 | 14/18 | 14/18 | 18/18 | 29 | 502.5 | $0.76 |
+
+In row I, Auto picked `gpt-6.1-terra` in all 18 sessions. One row M session hit the 30-minute timeout with a passing fix already written.
+
+Hidden tests passed per task:
+
+| Task | G: Claude Code, Sonnet | H: Copilot, Sonnet | I: Copilot, Auto | M: Claude Code, Opus |
+|---|---|---|---|---|
+| audit-logs | 3/3 | 1/3 | 3/3 | 3/3 |
+| os-registries | 3/3 | 3/3 | 3/3 | 3/3 |
+| flp-logging | 0/3 | 1/3 | 3/3 | 3/3 |
+| model-cache | 3/3 | 3/3 | 3/3 | 3/3 |
+| sql-leak | 3/3 | 3/3 | 3/3 | 3/3 |
+| tenant-leak | 3/3 | 3/3 | 3/3 | 3/3 |
+
+All seven test failures in rows G and H are on two tasks. Reading the patches:
+
+- **`flp-logging`, 5 failures:** the fix logs the error when triggering the background task throws, but not when the trigger returns a failed `Result`. The second case is still dropped silently.
+- **`audit-logs`, 2 failures:** a one-line change to the table name in the DynamoDB storage package. The real cause is elsewhere and the audit log stays empty.
+
+Row M's four failures are all scope: three `flp-logging` fixes that changed 7 to 9 source files (limit 6) and one `sql-leak` fix that changed 7 (limit 6).
+
+### The two tasks that fail, more attempts
+
+`flp-logging` and `audit-logs` were run again: the plain rows up to 10 attempts per task (row M stays at 3), and four new rows with 5 attempts per task, each changing one thing.
+
+- **Rows J and L, hint:** one sentence added to the end of the ticket: "Before you finish, check whether the same problem can happen in other ways or for other reasons, not only the first one you find."
+- **Row K:** `gpt-6.1-terra` pinned, the model Auto picked in 31 of the 32 row I sessions.
+- **Row N, spec first:** the text of the [preflight-spec](https://github.com/eriks-briedis/claude-flowkit/blob/main/skills/preflight-spec/SKILL.md) skill added to the ticket. It makes the agent write a goal, non-goals, acceptance criteria and a verification target before editing. Four things were added for this run: an instruction to proceed without waiting for a user, "list every code path that can produce the symptom … one acceptance criterion per path", "write a failing test for each acceptance criterion before changing production code", and a final step that checks the diff against the criteria. The exact text is in [`harness/tasks/webiny-flp-logging-vague-preflight/task.json`](harness/tasks/webiny-flp-logging-vague-preflight/task.json).
+
+Tests passed, then sessions that passed overall, then median cost per session.
+
+| Row | Agent | Model | Ticket | flp-logging | audit-logs |
+|---|---|---|---|---|---|
+| G | Claude Code | Sonnet 5.5 | vague | 1/10, 1/10, $0.18 | 7/10, 7/10, $0.34 |
+| L | Claude Code | Sonnet 5.5 | vague + hint | 3/5, 0/5, $0.23 | 1/5, 0/5, $0.43 |
+| N | Claude Code | Sonnet 5.5 | vague + spec first | 5/5, 1/5, $0.45 | 4/5, 4/5, $0.36 |
+| M | Claude Code | Opus 5.5 | vague | 3/3, 0/3, $1.59 | 3/3, 3/3, $0.70 |
+| H | Copilot CLI | Sonnet 5.5, pinned | vague | 2/10, 2/10, 14.0 credits | 6/10, 6/10, 25.8 credits |
+| J | Copilot CLI | Sonnet 5.5, pinned | vague + hint | 4/5, 2/5, 18.2 credits | 4/5, 1/5, 49.5 credits |
+| I | Copilot CLI | Auto | vague | 10/10, 10/10, 11.3 credits | 10/10, 7/10, 11.8 credits |
+| K | Copilot CLI | `gpt-6.1-terra`, pinned | vague | 5/5, 5/5, 14.7 credits | 5/5, 5/5, 13.4 credits |
+
+Median tool calls on `flp-logging` and `audit-logs`: row G 10.5 and 21, row L 14 and 23, row N 24 and 19, row M 43 and 28, row H 11 and 19, row J 14 and 34, row I 93 and 107, row K 75 and 88.
+
+### What it shows
+
+- **Precise tickets hid the failures.** On the same bugs, Sonnet went from 18/18 to 15/18 (Claude Code) and 14/18 (Copilot CLI) once the ticket gave only symptoms.
+- **Sonnet stopped at the first plausible cause, in both harnesses.** Over 10 attempts it passed the hidden tests on `flp-logging` in 1 (Claude Code) and 2 (Copilot CLI), and on `audit-logs` in 7 and 6. The harness makes no visible difference.
+- **Opus and `gpt-6.1-terra` did not stop early.** Opus passed the hidden tests in all 18 sessions, Auto in all 32 and pinned `gpt-6.1-terra` in all 10. Opus cost about 4× Sonnet per session and took 5× as long; `gpt-6.1-terra` used about 5 to 8 times Sonnet's tool calls.
+- **It is the model, not Auto's routing.** Pinning the model Auto usually picks gave the same result as Auto.
+- **A spec-first procedure brought Sonnet to Opus's level on `flp-logging`.** With row N's prompt Sonnet passed the hidden tests in 5 of 5 sessions against 1 of 10 without it, at $0.45 per session against Opus's $1.59.
+- **It did not fix the wrong diagnosis on `audit-logs`.** 4 of 5 against 7 of 10 without it. The one failure changed the table name again and wrote a test for that theory, which passed. A test written from a wrong diagnosis confirms it.
+- **One sentence of hint is weaker and less stable.** It helped on `flp-logging` in both harnesses (7 of 10 against 3 of 20 without it). On `audit-logs` it gave 4 of 5 in the Copilot CLI and 1 of 5 in Claude Code.
+- **Finding more causes widens the change.** Every row that found the second `flp-logging` cause mostly went over a size or file limit there: row L (5 of 5), row N (4 of 5), row J (3 of 5) and Opus (3 of 3). The real fix changes three files; these fixes also change the three task files or add a helper. Only `gpt-6.1-terra` found both causes and stayed within the limit.
+- **Auto still writes oversized changes.** 3 of its 10 `audit-logs` fixes pass the tests but are 8.3×, 14.0× and 15.3× the size of the real fix (limit 5×).
+
+### Hidden tests and review
+
+The tests from the real fix check some things only the precise ticket asked for. For the vague tasks those assertions were removed, each marked with an `// eval-vague:` comment:
+
+| Task | Removed |
+|---|---|
+| os-registries | Isolation between requests. |
+| sql-leak | The two concurrency tests and the requirement that the factory returns the same object. |
+| tenant-leak | Rejecting `setTenant()` inside a temporary switch. |
+| flp-logging | The folder id in the log entry. |
+
+`audit-logs` and `model-cache` use the tests unchanged.
+
+Every session that failed the hidden tests in the three-attempt rows (G, H, I, M) was then read:
+
+- **`sql-leak`, 5 sessions, test at fault.** Four fixes in rows G and H kept the leaking registry only when running under a test runner, which removes the leak in production. One fix in row M replaced it with weak references. The hidden test counted the registry as a plain list while running under the test runner, so it failed all five. It now hides the test-runner environment variables while it measures and counts only managers held by strong references. All twelve `sql-leak` sessions were re-graded from their saved patches and pass the tests.
+- **`sql-leak` file limit.** Two sessions then failed only for changing 6 source files against a limit of 5: one for a comment edit, one for a small shared helper. The limit for this task was raised to 6.
+- **`flp-logging` and `audit-logs`, 7 sessions, fix at fault.** Incomplete or wrong, as described above. Tests unchanged.
+
+Failures in the later sessions (attempts 4 to 10 and rows J, K, L and N) were not all read one by one.
+
+### Limits of the follow-up
+
+- **Sample:** three attempts per task for four of the six tasks, and 5 attempts for the rows that change the prompt. The `flp-logging` results are the only ones large enough to rely on.
+- **Two tasks:** the hint and the spec-first prompt were tested on `flp-logging` and `audit-logs` only, and the spec-first prompt in Claude Code only.
+- **Scope limits against wider fixes:** a fix that covers more causes than the real one is counted out of scope. Whether those wider changes are better or worse than the real fix was not judged.
+- **Review by the author:** the judgement that a failing fix is wrong, or that a test was unfair, is one reader's. The patches and test output are published so it can be checked.
+- **Patches left out:** the `model-cache` patches of rows I and M (six sessions) change a Webiny package that is not MIT-licensed. Their numbers are in `sessions-vague.csv`.
+
+### Vague ticket texts
+
+| Task | Ticket given to the agent |
+|---|---|
+| audit-logs | The Audit logs page in Admin is always empty. Our editors create and update content every day, and people change files and user roles too, but none of it shows up in the list. It used to work; we noticed a few weeks ago that it had stopped. Find out why and fix it. |
+| os-registries | We have an extension that adds a custom OpenSearch query operator, and another one that adds its own index. Since the upgrade both are ignored: searching with the custom operator behaves as if it did not exist, and the custom index is never used. The built-in operators still work. Nothing is logged. Find out why and fix it. |
+| sql-leak | On our self-hosted installation with the SQL database, the API server's memory use keeps growing while it serves requests, until we restart it. It grows with the number of requests, not with the amount of data. Find the cause and fix it. |
+| model-cache | The GraphQL schema is not always the same. For requests made without logging in, the tenant's `extensions` field is typed as plain `JSON`; for logged-in admins it is the typed input (`Tenant_ExtensionsInput`). It should not depend on who is asking. It also makes cold starts slower for us, because the schema gets built twice. Find the cause and fix it. |
+| tenant-leak | In our multi-tenant project, a GraphQL query now and then returns data from a different tenant, usually the parent tenant. It is intermittent and we cannot reproduce it reliably. It seems to happen on queries that ask for several things at once, for example the user's profile or permissions together with other data; the same fields queried one at a time are always right. Find the cause and fix it. |
+| flp-logging | Every so often a folder ends up with wrong permissions after it is created, changed or deleted: a new folder has no permission record, or a folder and its subfolders keep their old permissions. When it happens there is nothing in the logs, so we cannot tell what went wrong. The folder change itself always goes through. Make it possible to see from the logs when and why this happens. |
+
+Every ticket was followed by the same repo notes as before.
+
 ## Limits
 
-- **Ceiling:** every row passes 17 or 18 of 18, so pass rate separates nothing. The differences are in effort, size and cost.
+- **Ceiling:** every row A to F passes 17 or 18 of 18, so pass rate separates nothing there. The differences are in effort, size and cost. The [vague tickets](#vague-tickets) remove the ceiling.
 - **Sample:** three attempts per task. Only large differences mean anything. The wiki rows show why: their first attempt alone gave 2.5× the time for Auto, all three give 1.1×.
 - **Tickets:** written for this experiment from the PR descriptions. They are more precise than most real tickets, and some name the affected class or package.
 - **Reference fixes:** the real Webiny fixes were written with Claude Code, which may favour Claude models on similarity to the reference.

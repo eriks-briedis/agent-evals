@@ -1,6 +1,6 @@
 # Grading results
 
-What the grader recorded for each of the 108 sessions. Folder = row in the write-up. How grading works: [`../harness/README.md`](../harness/README.md).
+What the grader recorded for each of the 108 sessions of rows A to F and the 154 vague-ticket sessions of rows G to N. Folder = row in the write-up. How grading works: [`../harness/README.md`](../harness/README.md).
 
 | File | What it is |
 |---|---|
@@ -20,7 +20,7 @@ Main fields in `rows.jsonl`:
 | `wallSeconds`, `timedOut`, `exitCode` | How the agent process ended. |
 | `events` | Model, tool calls, turns, cost or credits, and for the wiki rows the pages opened. |
 
-[`../sessions.csv`](../sessions.csv) is a flat extract of these rows; every value in it matches.
+[`../sessions.csv`](../sessions.csv) (rows A to F) and [`../sessions-vague.csv`](../sessions-vague.csv) (rows G to N) are flat extracts of these rows; every value in them matches.
 
 Changes made for publication:
 
@@ -35,3 +35,5 @@ The `check.txt` files and verdicts are from the final grading pass, which used t
 
 - **Rows A and B, before the first re-grade:** 8 sessions were graded failed on tests and pass now. Row A: `flp-logging` attempts 1 to 3, `sql-leak` 1 and 2, `tenant-leak` 1 and 2. Row B: `flp-logging` 1. These are the three tasks whose hidden tests were edited. Rows C to F have no earlier grading on record.
 - **Row A, `model-cache` attempt 2:** graded failed once because the test database port was busy, passed when re-graded from its saved patch.
+- **Rows G, H and M, `sql-leak-vague`:** 5 sessions were graded failed on tests and pass now, after the hidden test was rewritten twice (row G attempts 1 and 2, row H attempts 2 and 3, row M attempt 3). The test and the reason are in [`../harness/README.md`](../harness/README.md).
+- **Rows G and I, `sql-leak-vague`:** 2 sessions failed only the file limit of 5 and pass now that it is 6 (row G attempt 3, row I attempt 2).

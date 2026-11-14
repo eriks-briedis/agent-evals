@@ -1,0 +1,237 @@
+diff --git a/packages/api-core/__tests__/tenancy/tenantContext.test.ts b/packages/api-core/__tests__/tenancy/tenantContext.test.ts
+index 6891fe89..1f1c7dc1 100644
+--- a/packages/api-core/__tests__/tenancy/tenantContext.test.ts
++++ b/packages/api-core/__tests__/tenancy/tenantContext.test.ts
+@@ -1,4 +1,5 @@
+ import { describe, it, expect, beforeEach } from "vitest";
++import { buildSchema, graphql } from "graphql";
+ import { Container } from "@webiny/di";
+ import { TenantContext } from "~/features/tenancy/TenantContext/index.js";
+ import { TenancyFeature } from "~/features/tenancy/TenancyFeature.js";
+@@ -80,6 +81,123 @@ describe("TenantContext.withTenant", () => {
+ 
+         expect(tenantContext.getTenant().id).toBe("root");
+     });
++
++    it("isolates overlapping tenant scopes and unscoped work", async () => {
++        const child = createTenant("child", "root");
++        tenantContext.setTenant(child);
++
++        let started!: () => void;
++        const scopeStarted = new Promise<void>(resolve => (started = resolve));
++        let release!: () => void;
++        const gate = new Promise<void>(resolve => (release = resolve));
++        const parentWork = tenantContext.withRootTenant(async () => {
++            started();
++            await gate;
++            return tenantContext.getTenant().id;
++        });
++
++        await scopeStarted;
++        const unscopedTenant = tenantContext.getTenant().id;
++        const siblingWork = tenantContext.withTenant(createTenant("sibling", "root"), async () => {
++            await gate;
++            return tenantContext.getTenant().id;
++        });
++        release();
++
++        expect(await Promise.all([parentWork, siblingWork])).toEqual(["root", "sibling"]);
++        expect(unscopedTenant).toBe("child");
++        expect(tenantContext.getTenant().id).toBe("child");
++    });
++
++    it("keeps sibling GraphQL fields in the request tenant during a parent lookup", async () => {
++        tenantContext.setTenant(createTenant("child", "root"));
++        let started!: () => void;
++        const lookupStarted = new Promise<void>(resolve => (started = resolve));
++        let release!: () => void;
++        const lookupFinished = new Promise<void>(resolve => (release = resolve));
++
++        const result = await graphql({
++            schema: buildSchema("type Query { profile: String, data: String }"),
++            source: "{ profile data }",
++            rootValue: {
++                profile: () =>
++                    tenantContext.withRootTenant(async () => {
++                        started();
++                        await lookupFinished;
++                        return tenantContext.getTenant().id;
++                    }),
++                data: async () => {
++                    await lookupStarted;
++                    const tenant = tenantContext.getTenant().id;
++                    release();
++                    return tenant;
++                }
++            }
++        });
++
++        expect(result.errors).toBeUndefined();
++        expect(result.data).toEqual({ profile: "root", data: "child" });
++        expect(tenantContext.getTenant().id).toBe("child");
++    });
++
++    it("isolates nested scopes and scoped setTenant calls", async () => {
++        const result = await tenantContext.withTenant(createTenant("outer", "root"), async () => {
++            await tenantContext.withTenant(createTenant("inner", "root"), async () => {
++                tenantContext.setTenant(createTenant("changed", "root"));
++                await Promise.resolve();
++                expect(tenantContext.getTenant().id).toBe("changed");
++            });
++            expect(tenantContext.getTenant().id).toBe("outer");
++            tenantContext.setTenant(createTenant("outer-changed", "root"));
++            return tenantContext.getTenant().id;
++        });
++
++        expect(result).toBe("outer-changed");
++        expect(tenantContext.getTenant().id).toBe("root");
++    });
++
++    it("keeps each tenant scoped when iterations overlap other work", async () => {
++        const seen: string[] = [];
++        const tenants = [createTenant("a", "root"), createTenant("b", "root")];
++        let started!: () => void;
++        const scopeStarted = new Promise<void>(resolve => (started = resolve));
++        let release!: () => void;
++        const gate = new Promise<void>(resolve => (release = resolve));
++        const work = tenantContext.withEachTenant(tenants, async tenant => {
++            if (tenant.id === "a") {
++                started();
++                await gate;
++            }
++            seen.push(tenantContext.getTenant().id);
++            return tenant.id;
++        });
++        await scopeStarted;
++        const outside = tenantContext.getTenant().id;
++        release();
++
++        expect(await work).toEqual(["a", "b"]);
++        expect(seen).toEqual(["a", "b"]);
++        expect(outside).toBe("root");
++        expect(tenantContext.getTenant().id).toBe("root");
++    });
++
++    it("rejects disabled tenants without affecting the current scope", async () => {
++        const disabled = { ...createTenant("disabled", "root"), status: "disabled" as const };
++        await expect(tenantContext.withTenant(disabled, async () => {})).rejects.toThrow();
++        expect(tenantContext.getTenant().id).toBe("root");
++    });
++
++    it("restores nested scopes when a callback rejects", async () => {
++        await tenantContext.withTenant(createTenant("outer", "root"), async () => {
++            await expect(
++                tenantContext.withEachTenant([createTenant("inner", "root")], async () => {
++                    throw new Error("Boom!");
++                })
++            ).rejects.toThrow("Boom!");
++            expect(tenantContext.getTenant().id).toBe("outer");
++        });
++        expect(tenantContext.getTenant().id).toBe("root");
++    });
+ });
+ 
+ /*
+diff --git a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+index e390e8e6..9bd3283f 100644
+--- a/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
++++ b/packages/api-core/src/features/tenancy/TenantContext/TenantContext.ts
+@@ -1,3 +1,4 @@
++import { AsyncLocalStorage } from "node:async_hooks";
+ import { createImplementation } from "@webiny/feature/api";
+ import { HandlerExecution } from "@webiny/event-handler-core";
+ import { TenantContext as Abstraction } from "./abstractions.js";
+@@ -7,6 +8,7 @@ import { TenantIsDisabledError } from "./errors.js";
+ 
+ class TenantContextImpl implements Abstraction.Interface {
+     private currentTenant: Tenant | null = null;
++    private readonly tenantStorage = new AsyncLocalStorage<{ tenant: Tenant }>();
+ 
+     constructor(
+         private getRootTenant: GetRootTenantUseCase.Interface,
+@@ -15,7 +17,7 @@ class TenantContextImpl implements Abstraction.Interface {
+ 
+     getTenant(): Tenant {
+         this.handlerExecution?.assertCurrent("TenantContext");
+-        return this.currentTenant!;
++        return (this.tenantStorage.getStore()?.tenant ?? this.currentTenant)!;
+     }
+ 
+     setTenant(tenant: Tenant): void {
+@@ -23,49 +25,30 @@ class TenantContextImpl implements Abstraction.Interface {
+         if (tenant.isInstalled && tenant.status === "disabled") {
+             throw new TenantIsDisabledError();
+         }
+-        this.currentTenant = tenant;
+-    }
+-
+-    /*
+-     * Puts back the tenant that was current before a `with*` call. That can be none at all: work
+-     * outside an HTTP request (a background task, a scheduled action) starts without a tenant.
+-     * Restoring is not switching, so it skips the checks `setTenant` makes.
+-     */
+-    private restoreTenant(tenant: Tenant | null): void {
+-        this.currentTenant = tenant;
++        const scope = this.tenantStorage.getStore();
++        if (scope) {
++            scope.tenant = tenant;
++        } else {
++            this.currentTenant = tenant;
++        }
+     }
+ 
+     async withRootTenant<T>(cb: () => T): Promise<T> {
+-        const initialTenant = this.currentTenant;
+         const rootTenant = await this.getRootTenant.execute();
+         if (!rootTenant.isOk()) {
+             return rootTenant.error as T;
+         }
+ 
+-        const tenant = rootTenant.value;
+-
+-        this.setTenant(tenant);
+-        try {
+-            return await cb();
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
++        return this.withTenant(rootTenant.value, async () => cb());
+     }
+ 
+     async withEachTenant<TReturn>(
+         tenants: Tenant[],
+         cb: (tenant: Tenant) => Promise<TReturn>
+     ): Promise<TReturn[]> {
+-        const initialTenant = this.currentTenant;
+         const results = [];
+         for (const tenant of tenants) {
+-            this.setTenant(tenant);
+-            try {
+-                results.push(await cb(tenant));
+-            } finally {
+-                this.restoreTenant(initialTenant);
+-            }
++            results.push(await this.withTenant(tenant, cb));
+         }
+         return results;
+     }
+@@ -74,14 +57,10 @@ class TenantContextImpl implements Abstraction.Interface {
+         tenant: Tenant,
+         cb: (tenant: Tenant) => Promise<TReturn>
+     ): Promise<TReturn> {
+-        const initialTenant = this.currentTenant;
+-        this.setTenant(tenant);
+-        try {
+-            return await cb(tenant);
+-        } finally {
+-            // Make sure that, whatever happens in the callback, the tenant is set back to the initial one.
+-            this.restoreTenant(initialTenant);
+-        }
++        return this.tenantStorage.run({ tenant }, () => {
++            this.setTenant(tenant);
++            return cb(tenant);
++        });
+     }
+ }
+ 

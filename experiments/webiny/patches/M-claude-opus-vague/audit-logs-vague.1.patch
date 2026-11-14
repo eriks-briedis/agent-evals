@@ -1,0 +1,96 @@
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..c438e1c5
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,43 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "~tests/helpers/useHandler.js";
++import { AuditLogsContext } from "~/abstractions.js";
++import { CreateGroupUseCase } from "@webiny/api-headless-cms/features/contentModelGroup/CreateGroup/index.js";
++import { ActionType } from "@webiny/common-audit-logs";
++
++const isSql = process.env.WEBINY_STORAGE?.includes("sql");
++
++describe.skipIf(isSql)("audit log subscriptions", () => {
++    it("should register the full request context as AuditLogsContext", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const resolved = context.container.resolve(AuditLogsContext);
++        expect(resolved.container).toBeDefined();
++        expect(resolved.auditLogs).toBe(context.auditLogs);
++    });
++
++    it("should create an audit log when a CMS group is created", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const result = await context.container.resolve(CreateGroupUseCase).execute({
++            name: "Audit Group",
++            slug: "audit-group",
++            description: "",
++            icon: { type: "emoji", name: "star", value: "⭐" }
++        } as CreateGroupUseCase.Input);
++        if (result.isFail()) {
++            throw result.error;
++        }
++        const group = result.value;
++
++        const { items } = await context.auditLogs.listAuditLogs({});
++        expect(items).toHaveLength(1);
++        expect(items![0]).toMatchObject({
++            message: "Group created",
++            app: "HEADLESS_CMS",
++            entityId: group.id,
++            action: ActionType.CREATE
++        });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..1305e954 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,9 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                // AuditLogsContext is the full request context (handlers use `.container` and `.auditLogs`),
++                // not the `auditLogs` facade — see the note in abstractions.ts.
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..401aec60 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const { auditLogs } = context;
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +133,8 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
++                const { auditLogs } = context;
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

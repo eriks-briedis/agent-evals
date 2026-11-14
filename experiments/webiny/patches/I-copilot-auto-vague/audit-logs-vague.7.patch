@@ -1,0 +1,194 @@
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..57b4c4ae 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -48,6 +48,7 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
+-        handler: () => inner.getContext<AuditLogsContext>()
++        handler: () => inner.getContext<AuditLogsContext>(),
++        invoke: inner.invoke
+     };
+ };
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..140373a8
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,110 @@
++import { describe, expect, it } from "vitest";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++import { EntryAfterUpdateEvent } from "@webiny/api-headless-cms/features/contentEntry/UpdateEntry/events.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++import { RoleAfterUpdateEvent } from "@webiny/api-core/features/security/roles/UpdateRole/events.js";
++import type { CmsEntry, CmsModel } from "@webiny/api-headless-cms/types/index.js";
++import type { File } from "@webiny/api-file-manager/domain/file/types.js";
++import type { Role } from "@webiny/api-core/types/security.js";
++import { useHandler } from "./helpers/useHandler.js";
++
++describe("audit log subscriptions", () => {
++    it("records domain events and exposes them through GraphQL", async () => {
++        const { handler, identity } = useHandler({ permissions: [] });
++        const { invoke } = useHandler();
++        const context = await handler();
++        const publisher = context.container.resolve(EventPublisher);
++
++        const model = { modelId: "article", isPrivate: false } as CmsModel;
++        const entry = {
++            id: "entry#0001",
++            entryId: "entry",
++            values: { title: "First" }
++        } as CmsEntry;
++        const updated = { ...entry, values: { title: "Updated" } };
++        const file = { id: "file-1", name: "image.png" } as File;
++        const originalRole = { id: "role-1", name: "Editor" } as Role;
++        const updatedRole = { ...originalRole, name: "Senior editor" };
++
++        await publisher.publish(new EntryAfterCreateEvent({ model, entry, input: {} }));
++        await publisher.publish(
++            new EntryAfterUpdateEvent({ model, entry: updated, original: entry, input: {} })
++        );
++        await publisher.publish(new FileAfterCreateEvent({ file }));
++        await publisher.publish(
++            new RoleAfterUpdateEvent({ original: originalRole, updated: updatedRole, input: {} })
++        );
++        await publisher.publish(
++            new EntryAfterCreateEvent({
++                model: { ...model, isPrivate: true },
++                entry,
++                input: {}
++            })
++        );
++
++        const [response] = await invoke({
++            body: {
++                query: `query {
++                    auditLogs {
++                        listAuditLogs(where: {}) {
++                            data { id app entity action entityId message createdBy { id } }
++                            error { message }
++                        }
++                    }
++                }`
++            }
++        });
++        expect(response.errors).toBeUndefined();
++        expect(response.data.auditLogs.listAuditLogs.error).toBeNull();
++        const logs = response.data.auditLogs.listAuditLogs.data;
++        expect(logs).toHaveLength(4);
++        expect(logs).toEqual(
++            expect.arrayContaining([
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY",
++                    action: "CREATE",
++                    entityId: "entry"
++                }),
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY_REVISION",
++                    action: "UPDATE",
++                    entityId: "entry#0001"
++                }),
++                expect.objectContaining({
++                    app: "FILE_MANAGER",
++                    entity: "FILE",
++                    action: "CREATE",
++                    entityId: "file-1"
++                }),
++                expect.objectContaining({
++                    app: "SECURITY",
++                    entity: "ROLE",
++                    action: "UPDATE",
++                    entityId: "role-1"
++                })
++            ])
++        );
++        expect(
++            logs.every((log: { createdBy: { id: string } }) => log.createdBy.id === identity?.id)
++        ).toBe(true);
++
++        const [getResponse] = await invoke({
++            body: {
++                query: `query GetAuditLog($id: ID!) {
++                    auditLogs {
++                        getAuditLog(id: $id) { data { id message } error { message } }
++                    }
++                }`,
++                variables: { id: logs[0].id }
++            }
++        });
++        expect(getResponse.errors).toBeUndefined();
++        expect(getResponse.data.auditLogs.getAuditLog).toEqual({
++            data: { id: logs[0].id, message: logs[0].message },
++            error: null
++        });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..6a3450dc 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -5,6 +5,7 @@ import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.j
+ import { FeatureFlags } from "@webiny/api-core/features/featureFlags/abstractions.js";
+ import { AuditLogsContext, AuditLogsStorage } from "./abstractions.js";
+ import type { GraphQLSchema } from "graphql";
++import type { AuditLogsContext as AuditLogsRequestContext } from "./types.js";
+ import { createAuditLogsContextValue } from "./context/AuditLogsContextValue.js";
+ import { createSubscriptionHooks } from "./subscriptions/index.js";
+ import { AuditLogsGraphQLSchema } from "./graphql/AuditLogsGraphQLSchema.js";
+@@ -44,16 +45,17 @@ export const AuditLogsFeature = createFeature({
+ 
+                 const storage = container.resolve(AuditLogsStorage);
+                 const eventPublisher = container.resolve(EventPublisher);
++                const requestContext = ctx as AuditLogsRequestContext;
+ 
+-                ctx.auditLogs = createAuditLogsContextValue({
+-                    getContext: () => ctx as any,
++                requestContext.auditLogs = createAuditLogsContextValue({
++                    getContext: () => requestContext,
+                     deleteLogsAfterDays: getDeleteLogsAfterDays(config.deleteLogsAfterDays),
+                     storage,
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
+-                createSubscriptionHooks(ctx as any);
++                container.registerInstance(AuditLogsContext, requestContext);
++                createSubscriptionHooks(requestContext);
+ 
+                 return STUB_SCHEMA;
+             }
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..f6b516b7 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,7 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
++import type { AuditLogsContext as AuditLogsRequestContext } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +109,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver({ auditLogs }: AuditLogsRequestContext) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +133,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver({ auditLogs }: AuditLogsRequestContext) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

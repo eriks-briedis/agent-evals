@@ -1,0 +1,32 @@
+{
+  "id": "webiny-audit-logs-vague-preflight",
+  "category": "replay-vague-preflight",
+  "prepared": "../../prepared/webiny-audit-logs",
+  "timeoutMin": 30,
+  "replay": {
+    "repo": "repos/webiny-js",
+    "pr": 5762,
+    "fix": "7d84940654",
+    "srcPaths": [
+      "packages/api-audit-logs/src/AuditLogsFeature.ts"
+    ],
+    "hiddenPaths": [
+      "packages/api-audit-logs/__tests__/cmsEntryAuditLogs.test.ts"
+    ]
+  },
+  "grade": {
+    "test": [
+      "packages/api-audit-logs/__tests__/cmsEntryAuditLogs.test.ts"
+    ],
+    "env": {
+      "WEBINY_STORAGE": "ddb"
+    },
+    "minTests": 1
+  },
+  "prompt": "The Audit logs page in Admin is always empty. Our editors create and update content every day, and people change files and user roles too, but none of it shows up in the list. It used to work; we noticed a few weeks ago that it had stopped. Find out why and fix it.\n\nBefore you change any code, follow the procedure below. No user is available in this session. Do not wait for answers or for confirmation. Answer your own blocking questions from the codebase, state each assumption in the spec, write the spec in your reply, then implement.\n\n# Preflight Spec\n\nUse this skill when the user gives a vague or underspecified coding task.\n\n## Purpose\n\nTurn the task into a short implementation spec and verification target before editing production code.\n\n## Core rule\n\nDo not start editing production code for non-trivial work until there is:\n- a goal\n- non-goals or scope boundaries\n- acceptance criteria\n- a verification target\n\n## Workflow\n\n1. Classify task type\n2. Decide whether the task is trivial, medium-risk, or high-risk\n3. Inspect relevant files if needed and allowed\n4. Ask up to 3 blocking questions if implementation would otherwise be ambiguous\n5. Produce a short spec\n6. Define verification target\n7. Wait for user confirmation before implementation unless the task is clearly trivial\n\n## Task types\n\n- bugfix\n- feature\n- refactor\n- frontend/UI\n- API change\n- DB/migration\n- investigation\n- test/eval\n- documentation\n\n## Risk levels\n\n### Trivial\n\nExamples:\n- copy change\n- rename a label\n- small documentation edit\n- obvious one-line config change\n\nBehavior:\n- do not ask unnecessary questions\n- provide a tiny checklist\n- proceed if the user asked for implementation\n\n### Medium-risk\n\nExamples:\n- contained bugfix\n- small feature\n- UI behavior change\n- test addition\n- localized refactor\n\nBehavior:\n- inspect relevant code first when useful\n- ask up to 3 blocking questions\n- write a short spec\n- identify a test, repro, or manual check\n\n### High-risk\n\nExamples:\n- database migration\n- auth/permissions\n- billing/payment\n- destructive actions\n- broad refactor\n- public API contract change\n- data loss risk\n\nBehavior:\n- do not implement until the spec is confirmed\n- require explicit acceptance criteria\n- require verification plan\n- call out rollback or migration risk where relevant\n\n## Spec format\n\nUse this format:\n\n```md\nTask type:\nRisk level:\n\nGoal:\n\nNon-goals:\n\nRelevant files/modules inspected:\n\nAcceptance criteria:\n\nVerification target:\n\nRisks / ambiguity:\n\nBlocking questions:\n```\n\n## Verification target guidance\n\nFor bug fixes:\n- reproduce the bug\n- list every code path that can produce the symptom, including callers, sibling implementations and every way each call can fail; write one acceptance criterion per path\n- write a failing test for each acceptance criterion before changing production code\n- add or identify a regression test/repro\n- confirm it fails before the fix\n- implement\n- run the same check again\n\nFor frontend/UI:\n- use a browser repro, Playwright check, screenshot, DOM measurement, or manual acceptance check\n- do not patch UI blind\n\nFor API changes:\n- define request/response contract\n- add or update contract tests\n- verify error behavior and backward compatibility where needed\n\nFor DB/migration:\n- inspect schema and migrations\n- verify migration applies cleanly\n- verify existing data shape is handled\n- document operational risks\n\nFor refactors:\n- identify behavior that must not change\n- add characterization tests if coverage is weak\n- do not combine broad refactors with feature changes unless explicitly approved\n\n## Question rules\n\nAsk questions only when the answer changes the implementation.\n\nAsk at most 3 questions at once.\n\nPrefer specific questions over generic ones.\n\nBad:\n\n```txt\nWhat exactly do you want?\nWhich files should I edit?\n```\n\nGood:\n\n```txt\nShould duplicate detection happen before or after normalization?\nShould existing duplicates be cleaned up, or only new duplicates prevented?\nIs this API change allowed to break existing clients?\n```\n\nIf the answer is discoverable from the codebase, inspect first instead of asking.\n\n## Stop conditions\n\nBefore implementation, stop and ask for confirmation when:\n\n- acceptance criteria are unclear\n- verification target is missing\n- the task touches high-risk areas\n- multiple reasonable implementations exist\n- user intent conflicts with existing tests or architecture\n\n## Validation before the final response\n\nBefore reporting, read the full diff next to the spec.\n\n- For each acceptance criterion, name the lines that satisfy it.\n- If a criterion is not met, go back to implementation.\n- Remove any change that no acceptance criterion needs.\n\n## Final response after implementation\n\nWhen implementation is complete, report:\n\n- spec followed\n- files changed\n- verification performed\n- before-fix failure observed, if applicable\n- after-fix result\n- remaining uncertainty\n",
+  "checks": {
+    "maxSizeRatio": 5,
+    "maxSourceFiles": 3
+  },
+  "notes": "Repo notes: this is the Webiny monorepo (Yarn workspaces, Node 24). Dependencies are installed and every package is already built. Yarn is not on PATH; run it as `node .yarn/releases/yarn-*.cjs <command>` from the repo root. Test a package: `WEBINY_STORAGE=ddb node .yarn/releases/yarn-*.cjs test packages/<folder>` (storage values: `ddb`, `sql`, `ddb-os,ddb`; storage-backed suites are skipped without it; OpenSearch is running on localhost:9200). Type-check a package: `node .yarn/releases/yarn-*.cjs check -p @webiny/<name>`. After changing a package, rebuild it so other packages see the change: `node .yarn/releases/yarn-*.cjs build -p @webiny/<name>`. Do not commit or push anything."
+}

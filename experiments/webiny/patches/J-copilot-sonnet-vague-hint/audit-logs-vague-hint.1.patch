@@ -1,0 +1,226 @@
+diff --git a/packages/api-audit-logs/__tests__/eventHandlers.test.ts b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+new file mode 100644
+index 00000000..b9e4b6d5
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/eventHandlers.test.ts
+@@ -0,0 +1,45 @@
++import { describe, expect, it } from "vitest";
++import { GraphQLEngine } from "@webiny/api-graphql";
++import { CreateGroupUseCase } from "@webiny/api-headless-cms/features/contentModelGroup/CreateGroup/index.js";
++import { useHandler } from "~tests/helpers/useHandler.js";
++
++const LIST = /* GraphQL */ `
++    {
++        auditLogs {
++            listAuditLogs(where: {}) {
++                data {
++                    app
++                    entity
++                    action
++                }
++                error {
++                    message
++                }
++            }
++        }
++    }
++`;
++
++describe("audit logs event handlers", () => {
++    it("should store an audit log when a domain event is published", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++        const engine = context.container.resolve(GraphQLEngine);
++
++        const before = await engine.execute({ query: LIST });
++        expect(before.data.auditLogs.listAuditLogs.data).toEqual([]);
++
++        const result = await context.container.resolve(CreateGroupUseCase).execute({
++            name: "Group",
++            slug: "group",
++            icon: { type: "icon", name: "star", value: "star" }
++        } as any);
++        expect(result.isOk()).toBe(true);
++
++        const after = await engine.execute({ query: LIST });
++        expect(after.data.auditLogs.listAuditLogs.error).toBeNull();
++        expect(after.data.auditLogs.listAuditLogs.data).toEqual([
++            { app: "HEADLESS_CMS", entity: "GROUP", action: "CREATE" }
++        ]);
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..f8c3f940 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -3,7 +3,7 @@ import { GraphQLContextualSchema } from "@webiny/api-graphql";
+ import { makeExecutableSchema } from "@graphql-tools/schema";
+ import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
+ import { FeatureFlags } from "@webiny/api-core/features/featureFlags/abstractions.js";
+-import { AuditLogsContext, AuditLogsStorage } from "./abstractions.js";
++import { AuditLogs, AuditLogsContext, AuditLogsStorage } from "./abstractions.js";
+ import type { GraphQLSchema } from "graphql";
+ import { createAuditLogsContextValue } from "./context/AuditLogsContextValue.js";
+ import { createSubscriptionHooks } from "./subscriptions/index.js";
+@@ -52,7 +52,8 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogs, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/abstractions.ts b/packages/api-audit-logs/src/abstractions.ts
+index 7ee09933..427c566a 100644
+--- a/packages/api-audit-logs/src/abstractions.ts
++++ b/packages/api-audit-logs/src/abstractions.ts
+@@ -1,18 +1,21 @@
+ import { createAbstraction } from "@webiny/feature/api";
+-import type { AuditLogsContext as IAuditLogsContext } from "~/types.js";
++import type { AuditLogsContext as IAuditLogsContext, AuditLogsContextValue } from "~/types.js";
+ import type { IStorage } from "~/storage/abstractions/Storage.js";
+ 
+-// NOTE: this token is registered with (and used as) the full audit-logs request context —
+-// handlers resolve it for `.container` and pass it to getAuditConfig. The interface must
+-// therefore be the context, not the AuditLogsContextValue facade. The proper fix (drop the
+-// whole-context injection in favour of an `AuditLogs` facade token + removing context.auditLogs)
+-// is the context-removal migration, tracked separately.
++// Registered with the full audit-logs request context: handlers need `.container` and pass it to
++// getAuditConfig, which reads `.auditLogs`. GraphQL resolvers use the `AuditLogs` facade instead.
+ export const AuditLogsContext = createAbstraction<IAuditLogsContext>("AuditLogsContext");
+ 
+ export namespace AuditLogsContext {
+     export type Interface = IAuditLogsContext;
+ }
+ 
++export const AuditLogs = createAbstraction<AuditLogsContextValue>("AuditLogs");
++
++export namespace AuditLogs {
++    export type Interface = AuditLogsContextValue;
++}
++
+ export const AuditLogsStorage = createAbstraction<IStorage>("AuditLogsStorage");
+ 
+ export namespace AuditLogsStorage {
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..615822f2 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -2,7 +2,7 @@ import { NotFoundError, resolve, resolveList } from "@webiny/api-graphql";
+ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractions.js";
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+-import { AuditLogsContext } from "~/abstractions.js";
++import { AuditLogs } from "~/abstractions.js";
+ import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+@@ -108,7 +108,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+ 
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+-            dependencies: [AuditLogsContext],
++            dependencies: [AuditLogs],
+             resolver(auditLogs: AuditLogsContextValue) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+@@ -132,7 +132,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+ 
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+-            dependencies: [AuditLogsContext],
++            dependencies: [AuditLogs],
+             resolver(auditLogs: AuditLogsContextValue) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+diff --git a/packages/api-audit-logs/src/utils/getAuditConfig.ts b/packages/api-audit-logs/src/utils/getAuditConfig.ts
+index 890eee33..9f515504 100644
+--- a/packages/api-audit-logs/src/utils/getAuditConfig.ts
++++ b/packages/api-audit-logs/src/utils/getAuditConfig.ts
+@@ -82,7 +82,7 @@ export const getAuditConfig = (audit: AuditAction) => {
+         context: AuditLogsContext
+     ): Promise<IAuditLog | null> => {
+         if (!context.auditLogs) {
+-            console.log("No AuditLogs defined.");
++            console.error("No AuditLogs defined - audit log was not created.");
+             return null;
+         } else if (!audit) {
+             console.log(`No Audit Action defined!`);
+@@ -116,8 +116,8 @@ export const getAuditConfig = (audit: AuditAction) => {
+                         payload,
+                         delay
+                     });
+-                } catch {
+-                    // Don't care at this point!
++                } catch (error) {
++                    console.error("Could not create or merge the audit log.", error);
+                 }
+                 return null;
+             }
+diff --git a/packages/app-audit-logs/src/features/listAuditLogs/ListAuditLogsRepository.ts b/packages/app-audit-logs/src/features/listAuditLogs/ListAuditLogsRepository.ts
+index 35714776..40d913ce 100644
+--- a/packages/app-audit-logs/src/features/listAuditLogs/ListAuditLogsRepository.ts
++++ b/packages/app-audit-logs/src/features/listAuditLogs/ListAuditLogsRepository.ts
+@@ -1,6 +1,6 @@
+ import { ListAuditLogsGateway } from "./abstractions/index.js";
+ import { ListAuditLogsRepository as RepositoryAbstraction } from "./abstractions/index.js";
+-import { listAuditLogsSchema } from "~/hooks/schema.js";
++import { auditLogSchema } from "~/hooks/schema.js";
+ import { transformRawAuditLog } from "~/utils/transformRawAuditLog.js";
+ 
+ class ListAuditLogsRepositoryImpl implements RepositoryAbstraction.Interface {
+@@ -9,16 +9,15 @@ class ListAuditLogsRepositoryImpl implements RepositoryAbstraction.Interface {
+     async execute(params: RepositoryAbstraction.Params): Promise<RepositoryAbstraction.Result> {
+         const response = await this.gateway.execute(params);
+ 
+-        const parsed = listAuditLogsSchema.safeParse(response.data);
+-        if (!parsed.success) {
+-            console.error(parsed.error);
+-            return {
+-                records: [],
+-                meta: response.meta
+-            };
+-        }
+-
+-        const records = parsed.data.map(auditLog => transformRawAuditLog({ auditLog }));
++        // Skip records that fail validation instead of dropping the whole page.
++        const records = response.data.flatMap(item => {
++            const parsed = auditLogSchema.safeParse(item);
++            if (!parsed.success) {
++                console.error(parsed.error);
++                return [];
++            }
++            return [transformRawAuditLog({ auditLog: parsed.data })];
++        });
+ 
+         return {
+             records,
+diff --git a/packages/app-audit-logs/src/hooks/schema.ts b/packages/app-audit-logs/src/hooks/schema.ts
+index a1f4bac5..53c675c5 100644
+--- a/packages/app-audit-logs/src/hooks/schema.ts
++++ b/packages/app-audit-logs/src/hooks/schema.ts
+@@ -4,8 +4,8 @@ export const auditLogSchema = zod.object({
+     id: zod.string(),
+     createdBy: zod.object({
+         id: zod.string(),
+-        displayName: zod.string().optional(),
+-        type: zod.string().optional()
++        displayName: zod.string().nullish().transform(value => value ?? undefined),
++        type: zod.string().nullish().transform(value => value ?? undefined)
+     }),
+     createdOn: zod.preprocess(value => {
+         if (typeof value === "string" || value instanceof Date) {
+@@ -31,7 +31,10 @@ export const auditLogSchema = zod.object({
+         .transform(value => {
+             return value || undefined;
+         }),
+-    content: zod.string()
++    content: zod
++        .string()
++        .nullish()
++        .transform(value => value ?? "")
+ });
+ 
+ export const listAuditLogsSchema = zod.array(auditLogSchema);

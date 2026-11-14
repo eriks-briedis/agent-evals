@@ -1,0 +1,63 @@
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..952123e4
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,43 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "~tests/helpers/useHandler.js";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++import { RoleAfterCreateEvent } from "@webiny/api-core/features/security/roles/CreateRole/events.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++
++const isSql = process.env.WEBINY_STORAGE?.includes("sql");
++
++describe.skipIf(isSql)("audit logs written by domain event subscriptions", () => {
++    const cases = [
++        {
++            name: "cms entry created",
++            app: "HEADLESS_CMS",
++            create: () =>
++                new EntryAfterCreateEvent({
++                    model: { isPrivate: false, modelId: "x" },
++                    entry: { id: "abc#0001", entryId: "abc" }
++                } as any)
++        },
++        {
++            name: "security role created",
++            app: "SECURITY",
++            create: () =>
++                new RoleAfterCreateEvent({ role: { id: "role-1", name: "Role" } } as any)
++        },
++        {
++            name: "file created",
++            app: "FILE_MANAGER",
++            create: () => new FileAfterCreateEvent({ file: { id: "file-1", name: "a.jpg" } } as any)
++        }
++    ];
++
++    it.each(cases)("should store an audit log when $name", async ({ app, create }) => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        await context.container.resolve(EventPublisher).publish(create());
++
++        const result = await context.auditLogs.listAuditLogs({ limit: 10 } as any);
++        expect(result.items.map(item => item.app)).toEqual([app]);
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..4ea859a3 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,8 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                // Handlers need the full request context (`.container` and `.auditLogs`), not just the facade.
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;

@@ -1,0 +1,36 @@
+$ build -p @webiny/api-opensearch (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-opensearch
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.06s
+
+70 files generated in dist, total: 55.1 kB (22.4 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 0.55s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-opensearch/__tests__/registriesPerRequest.test.ts (exit 0)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v4.1.11 <work>/webiny-os-registries-vague-GuK2Ch
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  00:55:03
+   Duration  343ms (transform 191ms, setup 48ms, import 195ms, tests 3ms, environment 0ms)
+

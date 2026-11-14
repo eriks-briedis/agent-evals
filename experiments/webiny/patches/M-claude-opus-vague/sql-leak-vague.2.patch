@@ -1,0 +1,53 @@
+diff --git a/packages/api-core-sql/src/ApiCoreSqlFeature.ts b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+index a844e8f1..3357a72c 100644
+--- a/packages/api-core-sql/src/ApiCoreSqlFeature.ts
++++ b/packages/api-core-sql/src/ApiCoreSqlFeature.ts
+@@ -2,6 +2,7 @@ import { createFeature } from "@webiny/feature/api";
+ import type { Knex } from "knex";
+ import { ApiCoreStorageOperationsFactory } from "@webiny/api-core";
+ import { createApiCoreSql } from "./createApiCoreSql.js";
++import { TableManager } from "./TableManager.js";
+ 
+ export interface ApiCoreSqlConfig {
+     knex: Knex;
+@@ -15,8 +16,13 @@ export interface ApiCoreSqlConfig {
+ export const ApiCoreSqlFeature = createFeature<ApiCoreSqlConfig>({
+     name: "ApiCoreSql",
+     register(container, { knex, tableNamePrefix }) {
++        // This runs once, in the root container, but `create()` runs on every request. Build the
++        // TableManager here so all requests share it. Creating one inside `create()` would leak:
++        // each TableManager adds itself to a process-global list that is never pruned.
++        const tableManager = new TableManager(knex, tableNamePrefix);
++
+         container.registerInstance(ApiCoreStorageOperationsFactory, {
+-            create: () => createApiCoreSql({ knex, tableNamePrefix })
++            create: () => createApiCoreSql({ knex, tableNamePrefix, tableManager })
+         });
+     }
+ });
+diff --git a/packages/api-core-sql/src/createApiCoreSql.ts b/packages/api-core-sql/src/createApiCoreSql.ts
+index 982c0221..ecd91f5a 100644
+--- a/packages/api-core-sql/src/createApiCoreSql.ts
++++ b/packages/api-core-sql/src/createApiCoreSql.ts
+@@ -11,13 +11,19 @@ import { SqlServiceManifestLoader } from "./serviceDiscovery/index.js";
+ interface CreateApiCoreSqlParams {
+     knex: Knex;
+     tableNamePrefix?: string;
++    /**
++     * Shared table manager. Pass one when calling this repeatedly (e.g. once per request) so every
++     * call reuses the same instance: each `TableManager` registers itself in a process-global list
++     * and is never released, and its "table verified" cache only helps if it outlives one call.
++     */
++    tableManager?: TableManager;
+ }
+ 
+ export const createApiCoreSql = ({
+     knex,
+-    tableNamePrefix
++    tableNamePrefix,
++    tableManager = new TableManager(knex, tableNamePrefix)
+ }: CreateApiCoreSqlParams): ApiCoreStorageOperations => {
+-    const tableManager = new TableManager(knex, tableNamePrefix);
+ 
+     ServiceDiscovery.setLoader(new SqlServiceManifestLoader(knex, tableManager));
+ 

@@ -1,0 +1,131 @@
+diff --git a/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts b/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
+index 5c4312ca..079acd99 100644
+--- a/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
++++ b/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
+@@ -16,7 +16,7 @@ import { ModelFieldCompression } from "~/features/contentModel/ModelFieldCompres
+  * ModelsFetcherImpl - Implementation with multi-level caching.
+  *
+  * Caching strategy:
+- * 1. Plugin models are cached per tenant (with access control applied by PluginModelsProvider)
++ * 1. Plugin models are cached per tenant (identity-independent; access control is applied by use cases)
+  * 2. Database models are cached per tenant (raw from DB)
+  * 3. Filtered database models are cached per tenant + identity (with access control applied)
+  * 4. Final merged list is cached per tenant + identity
+diff --git a/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts b/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts
+index dc0b38fd..3b1c16a5 100644
+--- a/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts
++++ b/packages/api-headless-cms/src/features/contentModel/shared/PluginModelsProvider.ts
+@@ -1,11 +1,9 @@
+-import { AccessControl } from "~/features/shared/abstractions.js";
+ import {
+     CmsModelPluginInstance,
+     PluginModelsProvider as ProviderAbstraction
+ } from "./abstractions.js";
+ import type { CmsModel } from "~/types/index.js";
+ import type { CmsModelPlugin } from "~/plugins/CmsModelPlugin.js";
+-import { filterAsync } from "~/utils/filterAsync.js";
+ import {
+     ModelsProvider,
+     type IModelsProvider
+@@ -19,7 +17,6 @@ import {
+ class PluginModelsProviderImpl implements ProviderAbstraction.Interface {
+     public constructor(
+         private modelPlugins: CmsModelPlugin[],
+-        private accessControl: AccessControl.Interface,
+         private modelsProvider: IModelsProvider
+     ) {}
+ 
+@@ -43,15 +40,10 @@ class PluginModelsProviderImpl implements ProviderAbstraction.Interface {
+                 };
+             }) as unknown as CmsModel[];
+ 
+-        const allowedLegacyModels = await filterAsync(legacyModels, model => {
+-            return this.accessControl.canAccessModel({ model });
+-        });
+-
+-        // Get models from new builder providers. These already have access control applied.
++        // Results are cached per tenant, so access control is applied by the use cases instead.
+         const builderModels = await this.modelsProvider.list(tenant);
+ 
+-        // Combine both sources
+-        return [...allowedLegacyModels, ...builderModels];
++        return [...legacyModels, ...builderModels];
+     }
+ 
+     private ensureTypeTag(model: Pick<CmsModel, "tags">) {
+@@ -68,5 +60,5 @@ class PluginModelsProviderImpl implements ProviderAbstraction.Interface {
+ 
+ export const PluginModelsProvider = ProviderAbstraction.createImplementation({
+     implementation: PluginModelsProviderImpl,
+-    dependencies: [[CmsModelPluginInstance, { multiple: true }], AccessControl, ModelsProvider]
++    dependencies: [[CmsModelPluginInstance, { multiple: true }], ModelsProvider]
+ });
+diff --git a/packages/api-headless-cms/src/features/modelBuilder/feature.ts b/packages/api-headless-cms/src/features/modelBuilder/feature.ts
+index 4abaf3c3..7033e3f8 100644
+--- a/packages/api-headless-cms/src/features/modelBuilder/feature.ts
++++ b/packages/api-headless-cms/src/features/modelBuilder/feature.ts
+@@ -15,7 +15,6 @@ import { JsonFieldType } from "./fields/JsonFieldType.js";
+ import { SearchableJsonFieldType } from "./fields/SearchableJsonFieldType.js";
+ // import { LocationFieldType } from "./fields/LocationFieldType.js";
+ import { FieldBuilderRegistry as FieldsRegistryAbstraction, ModelFactory } from "./abstractions.js";
+-import { AccessControl } from "~/features/shared/abstractions.js";
+ import { ModelsProvider as ModelsProviderAbstraction } from "./models/abstractions.js";
+ import { ModelsProvider } from "./models/ModelsProvider.js";
+ import { UiSeparatorFieldType } from "./fields/UiSeparatorFieldType.js";
+@@ -49,19 +48,10 @@ export const ModelBuilderFeature = createFeature({
+ 
+         // Register unified models provider
+         container.registerFactory(ModelsProviderAbstraction, () => {
+-            let accessControl: AccessControl.Interface | undefined = undefined;
+-            try {
+-                // TODO: add `container.resolveOptional`
+-                accessControl = container.resolve(AccessControl);
+-            } catch {
+-                // It's an optional dependency!
+-            }
+-
+             return new ModelsProvider(
+                 // TODO: introduce a `lazy: true` dependency modifier, which will inject a getter.
+                 () => container.resolveAll(ModelFactory),
+-                container.resolve(FieldsRegistryAbstraction),
+-                accessControl
++                container.resolve(FieldsRegistryAbstraction)
+             );
+         });
+     }
+diff --git a/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts b/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts
+index 9597e744..417c8bad 100644
+--- a/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts
++++ b/packages/api-headless-cms/src/features/modelBuilder/models/ModelsProvider.ts
+@@ -1,16 +1,13 @@
+ import { ModelsProvider as ProviderAbstraction } from "./abstractions.js";
+-import { AccessControl } from "~/features/shared/abstractions.js";
+ import { ModelFactory } from "../abstractions.js";
+ import { FieldBuilderRegistry } from "../abstractions.js";
+ import type { CmsModel } from "~/types/index.js";
+-import { filterAsync } from "~/utils/filterAsync.js";
+ import { ModelBuilder } from "./ModelBuilder.js";
+ 
+ export class ModelsProvider implements ProviderAbstraction.Interface {
+     public constructor(
+         private getModels: () => ModelFactory.Interface[],
+-        private fieldsRegistry: FieldBuilderRegistry.Interface,
+-        private accessControl: AccessControl.Interface | undefined
++        private fieldsRegistry: FieldBuilderRegistry.Interface
+     ) {}
+ 
+     async list(tenant: string): Promise<CmsModel[]> {
+@@ -35,12 +32,6 @@ export class ModelsProvider implements ProviderAbstraction.Interface {
+             }
+         }
+ 
+-        if (!this.accessControl) {
+-            return allModels;
+-        }
+-        // Apply access control filtering
+-        return filterAsync(allModels, model => {
+-            return this.accessControl!.canAccessModel({ model });
+-        });
++        return allModels;
+     }
+ }

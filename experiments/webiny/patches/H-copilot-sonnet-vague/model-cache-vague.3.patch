@@ -1,0 +1,43 @@
+diff --git a/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts b/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
+index 5c4312ca..cf5ecd93 100644
+--- a/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
++++ b/packages/api-headless-cms/src/features/contentModel/shared/ModelsFetcher.ts
+@@ -10,6 +10,7 @@ import { ModelNotFoundError, ModelPersistenceError } from "~/domain/contentModel
+ import { createCacheKey } from "~/utils/index.js";
+ import { ensureTypeTag } from "~/domain/contentModel/ensureTypeTag.js";
+ import type { CmsModel } from "~/types/index.js";
++import { IdentityContext } from "@webiny/api-core/features/security/IdentityContext/abstractions.js";
+ import { ModelFieldCompression } from "~/features/contentModel/ModelFieldCompression/index.js";
+ 
+ /**
+@@ -27,7 +28,8 @@ class ModelsFetcherImpl implements FetcherAbstraction.Interface {
+         private readonly pluginModelsProvider: PluginModelsProvider.Interface,
+         private readonly listModels: ListModelsStorageOperation.Interface,
+         private readonly tenantContext: TenantContext.Interface,
+-        private readonly modelFieldCompression: ModelFieldCompression.Interface
++        private readonly modelFieldCompression: ModelFieldCompression.Interface,
++        private readonly identityContext: IdentityContext.Interface
+     ) {}
+ 
+     async fetchAll(): Promise<Result<CmsModel[], FetcherAbstraction.Error>> {
+@@ -36,7 +38,10 @@ class ModelsFetcherImpl implements FetcherAbstraction.Interface {
+ 
+             // Create a cache key based on tenant + identity
+             const cacheKey = createCacheKey({
+-                tenant: tenant.id
++                tenant: tenant.id,
++                identity: this.identityContext.isAuthorizationEnabled()
++                    ? this.identityContext.getIdentity()?.id
++                    : undefined
+             });
+ 
+             // Try to get from cache first
+@@ -105,6 +110,7 @@ export const ModelsFetcher = FetcherAbstraction.createImplementation({
+         PluginModelsProvider,
+         ListModelsStorageOperation,
+         TenantContext,
+-        ModelFieldCompression
++        ModelFieldCompression,
++        IdentityContext
+     ]
+ });

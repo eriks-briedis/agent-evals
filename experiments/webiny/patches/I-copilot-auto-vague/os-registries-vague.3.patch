@@ -1,0 +1,158 @@
+diff --git a/packages/api-opensearch/__tests__/registries.test.ts b/packages/api-opensearch/__tests__/registries.test.ts
+new file mode 100644
+index 00000000..d2f3c838
+--- /dev/null
++++ b/packages/api-opensearch/__tests__/registries.test.ts
+@@ -0,0 +1,128 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { OpenSearchIndexFeature } from "~/features/OpenSearchIndex/feature.js";
++import { OpenSearchIndex } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndex.js";
++import { OpenSearchIndexRegistry } from "~/features/OpenSearchIndex/abstractions/OpenSearchIndexRegistry.js";
++import { OpenSearchQueryBuilderOperatorFeature } from "~/features/OpenSearchQueryBuilderOperator/feature.js";
++import { OpenSearchQueryBuilderOperator } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperator.js";
++import { OpenSearchQueryBuilderOperatorRegistry } from "~/features/OpenSearchQueryBuilderOperator/abstractions/OpenSearchQueryBuilderOperatorRegistry.js";
++
++class CustomOperatorImpl implements OpenSearchQueryBuilderOperator.Interface {
++    public getOperator() {
++        return "custom";
++    }
++
++    public apply(query: OpenSearchQueryBuilderOperator.Query) {
++        query.filter.push({ term: { custom: true } });
++    }
++}
++
++class OverrideEqualImpl
++    extends CustomOperatorImpl
++    implements OpenSearchQueryBuilderOperator.Interface
++{
++    public override getOperator() {
++        return "eq";
++    }
++}
++
++const CustomOperator = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: CustomOperatorImpl,
++    dependencies: []
++});
++const OverrideEqual = OpenSearchQueryBuilderOperator.createImplementation({
++    implementation: OverrideEqualImpl,
++    dependencies: []
++});
++
++class BaseIndexImpl implements OpenSearchIndex.Interface {
++    public readonly body = {};
++    public canUse() {
++        return true;
++    }
++}
++
++class CustomIndexImpl extends BaseIndexImpl implements OpenSearchIndex.Interface {
++    public override readonly body = { settings: { number_of_shards: 2 } };
++}
++
++class DisabledIndexImpl extends BaseIndexImpl implements OpenSearchIndex.Interface {
++    public override canUse() {
++        return false;
++    }
++}
++
++const BaseIndex = OpenSearchIndex.createImplementation({
++    implementation: BaseIndexImpl,
++    dependencies: []
++});
++const CustomIndex = OpenSearchIndex.createImplementation({
++    implementation: CustomIndexImpl,
++    dependencies: []
++});
++const DisabledIndex = OpenSearchIndex.createImplementation({
++    implementation: DisabledIndexImpl,
++    dependencies: []
++});
++
++describe("OpenSearch registries in child containers", () => {
++    it("includes child operators and lets them override built-ins without affecting siblings", () => {
++        const parent = new Container();
++        OpenSearchQueryBuilderOperatorFeature.register(parent);
++        const parentRegistry = parent.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        const child = parent.createChildContainer();
++        child.register(CustomOperator);
++        child.register(OverrideEqual);
++
++        const registry = child.resolve(OpenSearchQueryBuilderOperatorRegistry);
++        const custom = registry.get("custom");
++        const query: OpenSearchQueryBuilderOperator.Query = {
++            filter: [],
++            must: [],
++            must_not: [],
++            should: []
++        };
++        expect(custom).toBeInstanceOf(CustomOperatorImpl);
++        custom!.apply(query, {
++            name: "test",
++            path: "test",
++            basePath: "test",
++            value: true,
++            keyword: false
++        });
++        expect(query.filter).toEqual([{ term: { custom: true } }]);
++        expect(registry.get("eq")).toBeInstanceOf(OverrideEqualImpl);
++        expect(registry.getAll()).toContain(custom);
++        expect(registry.get("contains")).toBeDefined();
++        expect(parentRegistry.get("custom")).toBeUndefined();
++        expect(parentRegistry.get("eq")).not.toBeInstanceOf(OverrideEqualImpl);
++        expect(
++            parent
++                .createChildContainer()
++                .resolve(OpenSearchQueryBuilderOperatorRegistry)
++                .get("custom")
++        ).toBeUndefined();
++    });
++
++    it("selects the last usable child index and keeps parent and sibling selections independent", () => {
++        const parent = new Container();
++        OpenSearchIndexFeature.register(parent);
++        parent.register(BaseIndex);
++        const parentRegistry = parent.resolve(OpenSearchIndexRegistry);
++        const child = parent.createChildContainer();
++        child.register(CustomIndex);
++        child.register(DisabledIndex);
++
++        const registry = child.resolve(OpenSearchIndexRegistry);
++        expect(registry.getLastAdded()).toBeInstanceOf(CustomIndexImpl);
++        expect(registry.getAll().map(index => index.body)).toEqual([
++            {},
++            { settings: { number_of_shards: 2 } }
++        ]);
++        expect(parentRegistry.getLastAdded()).toBeInstanceOf(BaseIndexImpl);
++        expect(parentRegistry.getAll()).toHaveLength(1);
++        expect(
++            parent.createChildContainer().resolve(OpenSearchIndexRegistry).getAll()
++        ).toHaveLength(1);
++    });
++});
+diff --git a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+index 334e79da..d8feaf87 100644
+--- a/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchIndex/feature.ts
+@@ -4,6 +4,6 @@ import { OpenSearchIndexRegistry } from "./OpenSearchIndexRegistry.js";
+ export const OpenSearchIndexFeature = createFeature({
+     name: "opensearch.internal.index",
+     register(container) {
+-        container.register(OpenSearchIndexRegistry).inSingletonScope();
++        container.register(OpenSearchIndexRegistry).inContainerScope();
+     }
+ });
+diff --git a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+index 6c2b4aef..0cb69234 100644
+--- a/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
++++ b/packages/api-opensearch/src/features/OpenSearchQueryBuilderOperator/feature.ts
+@@ -34,6 +34,6 @@ export const OpenSearchQueryBuilderOperatorFeature = createFeature({
+         container.register(NotIn).inSingletonScope();
+         container.register(StartsWith).inSingletonScope();
+         container.register(NotStartsWith).inSingletonScope();
+-        container.register(OpenSearchQueryBuilderOperatorRegistry).inSingletonScope();
++        container.register(OpenSearchQueryBuilderOperatorRegistry).inContainerScope();
+     }
+ });

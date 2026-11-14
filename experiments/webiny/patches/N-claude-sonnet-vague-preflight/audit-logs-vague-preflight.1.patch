@@ -1,0 +1,122 @@
+diff --git a/packages/api-audit-logs/__tests__/featureWiring.test.ts b/packages/api-audit-logs/__tests__/featureWiring.test.ts
+new file mode 100644
+index 00000000..37639caa
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/featureWiring.test.ts
+@@ -0,0 +1,78 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/di";
++import { GraphQLContextualSchema } from "@webiny/api-graphql";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { FeatureFlags } from "@webiny/api-core/features/featureFlags/abstractions.js";
++import { EntryAfterCreateEventHandler } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/index.js";
++import { AuditLogsFeature } from "~/AuditLogsFeature.js";
++import { AuditLogsContext, AuditLogsStorage } from "~/abstractions.js";
++
++const createRoot = (enabled = true) => {
++    const root = new Container();
++    root.registerInstance(FeatureFlags, {
++        get: () => ({ isEnabled: () => enabled })
++    } as any);
++    root.registerInstance(EventPublisher, { publish: async () => undefined } as any);
++    root.registerInstance(AuditLogsStorage, {} as any);
++    AuditLogsFeature.register(root, {});
++    return root;
++};
++
++const buildRequest = async (root: Container) => {
++    const schemas = root.resolveAll(GraphQLContextualSchema);
++    const child = root.createChildContainer();
++    const ctx: Record<string, any> = { container: child };
++    for (const s of schemas) {
++        await s.build(ctx);
++    }
++    return { ctx, child };
++};
++
++describe("AuditLogsFeature per-request wiring", () => {
++    it("wires every request, not only the first one", async () => {
++        const root = createRoot();
++
++        const first = await buildRequest(root);
++        const second = await buildRequest(root);
++
++        expect(first.ctx.auditLogs).toBeDefined();
++        expect(second.ctx.auditLogs).toBeDefined();
++        expect(second.ctx.auditLogs).not.toBe(first.ctx.auditLogs);
++
++        for (const { child } of [first, second]) {
++            expect(child.resolveAll(EntryAfterCreateEventHandler).length).toBeGreaterThan(0);
++        }
++    });
++
++    it("binds AuditLogsContext to the request's own context", async () => {
++        const root = createRoot();
++
++        const first = await buildRequest(root);
++        const second = await buildRequest(root);
++
++        const resolvedFirst = first.child.resolve(AuditLogsContext);
++        const resolvedSecond = second.child.resolve(AuditLogsContext);
++
++        // Handlers use `context.auditLogs` and `context.container`
++        expect(resolvedFirst).toBe(first.ctx);
++        expect(resolvedSecond).toBe(second.ctx);
++        expect(resolvedSecond.auditLogs).toBe(second.ctx.auditLogs);
++    });
++
++    it("does not double register handlers when built twice for the same request", async () => {
++        const root = createRoot();
++        const { ctx, child } = await buildRequest(root);
++        const before = child.resolveAll(EntryAfterCreateEventHandler).length;
++
++        for (const s of root.resolveAll(GraphQLContextualSchema)) {
++            await s.build(ctx);
++        }
++
++        expect(child.resolveAll(EntryAfterCreateEventHandler).length).toBe(before);
++    });
++
++    it("registers nothing when the feature flag is disabled", () => {
++        const root = createRoot(false);
++        expect(root.resolveAll(GraphQLContextualSchema)).toHaveLength(0);
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..0c02a88b 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -28,8 +28,6 @@ export const AuditLogsFeature = createFeature({
+ 
+         container.register(AuditLogsGraphQLSchema);
+ 
+-        let initialized = false;
+-
+         const STUB_SCHEMA: GraphQLSchema = makeExecutableSchema({
+             typeDefs: "type Query\ntype Mutation",
+             assumeValidSDL: true
+@@ -37,10 +35,11 @@ export const AuditLogsFeature = createFeature({
+ 
+         container.registerInstance(GraphQLContextualSchema, {
+             async build(ctx: Record<string, any>): Promise<GraphQLSchema> {
+-                if (initialized) {
++                // `ctx` and `ctx.container` are per-request, so wiring must happen once per
++                // request (not once per process). Guard only against double-build of one ctx.
++                if (ctx.auditLogs) {
+                     return STUB_SCHEMA;
+                 }
+-                initialized = true;
+ 
+                 const storage = container.resolve(AuditLogsStorage);
+                 const eventPublisher = container.resolve(EventPublisher);
+@@ -52,7 +51,9 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                // Handlers read `context.auditLogs` and `context.container`, so bind the full
++                // request context (not the facade) on the request container.
++                (ctx.container as Container).registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;

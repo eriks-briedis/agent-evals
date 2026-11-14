@@ -1,0 +1,218 @@
+diff --git a/packages/api-audit-logs/__tests__/helpers/useHandler.ts b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+index e1f83cd3..3428d030 100644
+--- a/packages/api-audit-logs/__tests__/helpers/useHandler.ts
++++ b/packages/api-audit-logs/__tests__/helpers/useHandler.ts
+@@ -48,6 +48,7 @@ export const useHandler = (params: UseHandlerParams = {}) => {
+     return {
+         identity: inner.identity,
+         tenant: inner.tenant,
++        invoke: inner.invoke,
+         handler: () => inner.getContext<AuditLogsContext>()
+     };
+ };
+diff --git a/packages/api-audit-logs/__tests__/subscriptions.test.ts b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+new file mode 100644
+index 00000000..86ad0adf
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/subscriptions.test.ts
+@@ -0,0 +1,157 @@
++import { describe, expect, it } from "vitest";
++import { EventPublisher } from "@webiny/api-core/features/eventPublisher/index.js";
++import { RoleAfterUpdateEvent } from "@webiny/api-core/features/security/roles/UpdateRole/events.js";
++import type { Role } from "@webiny/api-core/types/security.js";
++import { FileAfterCreateEvent } from "@webiny/api-file-manager/features/file/CreateFile/events.js";
++import type { File } from "@webiny/api-file-manager/domain/file/types.js";
++import { EntryAfterCreateEvent } from "@webiny/api-headless-cms/features/contentEntry/CreateEntry/events.js";
++import { EntryAfterUpdateEvent } from "@webiny/api-headless-cms/features/contentEntry/UpdateEntry/events.js";
++import type { CmsEntry, CmsModel } from "@webiny/api-headless-cms/types/index.js";
++import { useHandler } from "~tests/helpers/useHandler.js";
++
++describe("audit log subscriptions", () => {
++    it("records domain events and exposes them through GraphQL", async () => {
++        const identity = { id: "editor", type: "admin", displayName: "Editor" };
++        const { handler, invoke } = useHandler({ identity });
++        const context = await handler();
++        const publisher = context.container.resolve(EventPublisher);
++        const model = { modelId: "article", isPrivate: false } as CmsModel;
++        const entry: CmsEntry = {
++            tenant: "root",
++            id: "entry#0001",
++            entryId: "entry",
++            modelId: "article",
++            version: 1,
++            locked: false,
++            status: "draft",
++            createdOn: "2026-01-01T00:00:00.000Z",
++            savedOn: "2026-01-01T00:00:00.000Z",
++            modifiedOn: null,
++            deletedOn: null,
++            restoredOn: null,
++            firstPublishedOn: null,
++            lastPublishedOn: null,
++            createdBy: identity,
++            savedBy: identity,
++            modifiedBy: null,
++            deletedBy: null,
++            restoredBy: null,
++            firstPublishedBy: null,
++            lastPublishedBy: null,
++            revisionCreatedOn: "2026-01-01T00:00:00.000Z",
++            revisionSavedOn: "2026-01-01T00:00:00.000Z",
++            revisionModifiedOn: null,
++            revisionDeletedOn: null,
++            revisionRestoredOn: null,
++            revisionFirstPublishedOn: null,
++            revisionLastPublishedOn: null,
++            revisionCreatedBy: identity,
++            revisionSavedBy: identity,
++            revisionModifiedBy: null,
++            revisionDeletedBy: null,
++            revisionRestoredBy: null,
++            revisionFirstPublishedBy: null,
++            revisionLastPublishedBy: null,
++            live: null,
++            revisionDescription: undefined,
++            expiresAt: null,
++            values: { title: "Before" }
++        };
++        const updatedEntry = { ...entry, values: { title: "After" } };
++        const file = { id: "file", name: "image.png" } as File;
++        const role = { id: "role", name: "Editor" } as Role;
++        const updatedRole = { ...role, name: "Senior editor" };
++
++        await publisher.publish(
++            new EntryAfterCreateEvent({ model, entry, input: { values: entry.values } })
++        );
++        await publisher.publish(
++            new EntryAfterUpdateEvent({
++                model,
++                original: entry,
++                entry: updatedEntry,
++                input: { values: updatedEntry.values }
++            })
++        );
++        await publisher.publish(new FileAfterCreateEvent({ file }));
++        await publisher.publish(
++            new RoleAfterUpdateEvent({
++                original: role,
++                updated: updatedRole,
++                input: { name: updatedRole.name }
++            })
++        );
++        await publisher.publish(
++            new EntryAfterCreateEvent({
++                model: { ...model, isPrivate: true },
++                entry,
++                input: { values: entry.values }
++            })
++        );
++
++        const [response] = await invoke({
++            body: {
++                query: `query {
++                    auditLogs {
++                        listAuditLogs(where: {}) {
++                            data { id app entity action entityId message createdBy { id } }
++                            error { message }
++                        }
++                    }
++                }`
++            }
++        });
++
++        expect(response.errors).toBeUndefined();
++        expect(response.data.auditLogs.listAuditLogs.error).toBeNull();
++        expect(response.data.auditLogs.listAuditLogs.data).toHaveLength(4);
++        expect(response.data.auditLogs.listAuditLogs.data).toEqual(
++            expect.arrayContaining([
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY",
++                    action: "CREATE",
++                    entityId: entry.entryId
++                }),
++                expect.objectContaining({
++                    app: "HEADLESS_CMS",
++                    entity: "ENTRY_REVISION",
++                    action: "UPDATE",
++                    entityId: entry.id
++                }),
++                expect.objectContaining({
++                    app: "FILE_MANAGER",
++                    entity: "FILE",
++                    action: "CREATE",
++                    entityId: file.id
++                }),
++                expect.objectContaining({
++                    app: "SECURITY",
++                    entity: "ROLE",
++                    action: "UPDATE",
++                    entityId: role.id
++                })
++            ])
++        );
++        for (const log of response.data.auditLogs.listAuditLogs.data) {
++            expect(log.createdBy.id).toBe(identity.id);
++        }
++
++        const id = response.data.auditLogs.listAuditLogs.data[0].id;
++        const [getResponse] = await invoke({
++            body: {
++                query: `query ($id: ID!) {
++                    auditLogs {
++                        getAuditLog(id: $id) {
++                            data { id }
++                            error { message }
++                        }
++                    }
++                }`,
++                variables: { id }
++            }
++        });
++        expect(getResponse.errors).toBeUndefined();
++        expect(getResponse.data.auditLogs.getAuditLog).toEqual({ data: { id }, error: null });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..e144ed29 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as AuditLogsContext.Interface);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..4c70c9ed 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -3,7 +3,6 @@ import { CoreGraphQLSchemaFactory } from "@webiny/api-graphql/graphql/abstractio
+ import { GraphQLSchemaBuilder } from "@webiny/api-graphql/features/GraphQLSchemaBuilder/abstractions.js";
+ import { createZodError } from "@webiny/utils";
+ import { AuditLogsContext } from "~/abstractions.js";
+-import type { AuditLogsContextValue } from "~/types.js";
+ import { getValidationSchema, listValidationSchema } from "./validation.js";
+ 
+ interface IListAuditLogsWhere {
+@@ -109,7 +108,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver({ auditLogs }: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+@@ -133,7 +132,7 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver({ auditLogs }: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);

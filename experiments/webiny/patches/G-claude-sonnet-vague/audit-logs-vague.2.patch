@@ -1,0 +1,69 @@
+diff --git a/packages/api-audit-logs/__tests__/contextToken.test.ts b/packages/api-audit-logs/__tests__/contextToken.test.ts
+new file mode 100644
+index 00000000..a744494a
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/contextToken.test.ts
+@@ -0,0 +1,24 @@
++import { describe, expect, it } from "vitest";
++import { useHandler } from "./helpers/useHandler";
++import { AuditLogsContext } from "~/abstractions.js";
++import { AUDIT } from "~/config.js";
++import { getAuditConfig } from "~/utils/getAuditConfig.js";
++
++describe("AuditLogsContext token", () => {
++    it("should resolve to the full context, so event handlers can create audit logs", async () => {
++        const { handler } = useHandler();
++        const context = await handler();
++
++        const resolved = context.container.resolve(AuditLogsContext);
++        expect(resolved.auditLogs).toBeDefined();
++        expect(resolved.container).toBeDefined();
++
++        const log = await getAuditConfig(AUDIT.SECURITY.USER.CREATE)(
++            "User created",
++            { id: "1" },
++            "1",
++            resolved
++        );
++        expect(log).toMatchObject({ entityId: "1" });
++    });
++});
+diff --git a/packages/api-audit-logs/src/AuditLogsFeature.ts b/packages/api-audit-logs/src/AuditLogsFeature.ts
+index b8a30573..b24dfe04 100644
+--- a/packages/api-audit-logs/src/AuditLogsFeature.ts
++++ b/packages/api-audit-logs/src/AuditLogsFeature.ts
+@@ -52,7 +52,7 @@ export const AuditLogsFeature = createFeature({
+                     eventPublisher
+                 });
+ 
+-                container.registerInstance(AuditLogsContext, ctx.auditLogs);
++                container.registerInstance(AuditLogsContext, ctx as any);
+                 createSubscriptionHooks(ctx as any);
+ 
+                 return STUB_SCHEMA;
+diff --git a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+index 604b4057..36a16aa1 100644
+--- a/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
++++ b/packages/api-audit-logs/src/graphql/AuditLogsGraphQLSchema.ts
+@@ -109,8 +109,9 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<{ id: string }>({
+             path: "AuditLogsQuery.getAuditLog",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
++                    const auditLogs: AuditLogsContextValue = context.auditLogs;
+                     return resolve(async () => {
+                         const validation = await getValidationSchema.safeParseAsync(args);
+ 
+@@ -133,8 +134,9 @@ class AuditLogsGraphQLSchemaImpl implements CoreGraphQLSchemaFactory.Interface {
+         builder.addResolver<IListAuditLogsArgs>({
+             path: "AuditLogsQuery.listAuditLogs",
+             dependencies: [AuditLogsContext],
+-            resolver(auditLogs: AuditLogsContextValue) {
++            resolver(context: AuditLogsContext.Interface) {
+                 return async ({ args }) => {
++                    const auditLogs: AuditLogsContextValue = context.auditLogs;
+                     return resolveList(async () => {
+                         const validation = await listValidationSchema.safeParseAsync(args);
+                         if (!validation.success) {

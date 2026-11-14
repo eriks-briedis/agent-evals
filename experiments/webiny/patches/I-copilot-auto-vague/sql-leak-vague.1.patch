@@ -1,0 +1,225 @@
+diff --git a/packages/api-core-sql/__tests__/__api__/setupFile.js b/packages/api-core-sql/__tests__/__api__/setupFile.js
+index 365ba200..294b7f84 100644
+--- a/packages/api-core-sql/__tests__/__api__/setupFile.js
++++ b/packages/api-core-sql/__tests__/__api__/setupFile.js
+@@ -3,6 +3,8 @@ import { createApiCoreSql } from "~/createApiCoreSql.js";
+ import { getSqlTablePrefix } from "~/getSqlTablePrefix.js";
+ import knexLib from "knex";
+ 
++globalThis.__sqlTableManagers ??= [];
++
+ if (!global.__testKnex) {
+     global.__testKnex = knexLib({
+         client: "better-sqlite3",
+diff --git a/packages/api-core-sql/src/TableManager.ts b/packages/api-core-sql/src/TableManager.ts
+index 4bbd9af5..579fcbca 100644
+--- a/packages/api-core-sql/src/TableManager.ts
++++ b/packages/api-core-sql/src/TableManager.ts
+@@ -6,6 +6,13 @@ interface ITableManager {
+     ensure(tableName: string, creator: (table: Knex.CreateTableBuilder) => void): Promise<void>;
+ }
+ 
++export const registerSqlTableManager = (manager: { reset(): void }): void => {
++    const g = globalThis as Record<string, unknown>;
++    const managers = g.__sqlTableManagers as Array<{ reset(): void }> | undefined;
++    // Test setups opt in to reset cached table state after dropping tables.
++    managers?.push(manager);
++};
++
+ export class TableManager implements ITableManager {
+     private readonly knex: Knex;
+     private readonly prefix: string;
+@@ -15,9 +22,7 @@ export class TableManager implements ITableManager {
+         this.knex = knex;
+         this.prefix = prefix ? `${prefix}_` : "";
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ITableManager[];
+-        managers.push(this);
++        registerSqlTableManager(this);
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-pg-os/__tests__/__api__/setupFile.js b/packages/api-headless-cms-pg-os/__tests__/__api__/setupFile.js
+index 589181be..4e4256a7 100644
+--- a/packages/api-headless-cms-pg-os/__tests__/__api__/setupFile.js
++++ b/packages/api-headless-cms-pg-os/__tests__/__api__/setupFile.js
+@@ -18,6 +18,8 @@ import { createPgToOpenSearchHandler } from "@webiny/api-sync-pg-to-opensearch";
+ import { createSyncBridge } from "./syncBridge.js";
+ import { createTestModelIndexName } from "@webiny/api-headless-cms-utils-os/testing/index.js";
+ 
++globalThis.__sqlTableManagers ??= [];
++
+ const prefix = getOpenSearchIndexPrefix();
+ if (!prefix.includes("api-")) {
+     process.env.OPENSEARCH_INDEX_PREFIX = `${prefix}api-headless-cms-pg-os-env-`;
+diff --git a/packages/api-headless-cms-pg-os/__tests__/tableManagerRegistration.test.ts b/packages/api-headless-cms-pg-os/__tests__/tableManagerRegistration.test.ts
+new file mode 100644
+index 00000000..a695d3f3
+--- /dev/null
++++ b/packages/api-headless-cms-pg-os/__tests__/tableManagerRegistration.test.ts
+@@ -0,0 +1,67 @@
++import { afterEach, describe, expect, it } from "vitest";
++import knexLib from "knex";
++import { Container } from "@webiny/feature/api";
++import { KnexClient } from "@webiny/api-core-sql";
++import { TableManager } from "@webiny/api-core-sql/TableManager.js";
++import { EntryTableManager } from "@webiny/api-headless-cms-sql/features/entryTableManager/abstractions.js";
++import { EntryTableManagerFeature } from "@webiny/api-headless-cms-sql/features/entryTableManager/feature.js";
++import { GroupSchemaManager } from "@webiny/api-headless-cms-sql/features/groupSchemaManager/abstractions.js";
++import { GroupSchemaManagerFeature } from "@webiny/api-headless-cms-sql/features/groupSchemaManager/feature.js";
++import { ModelSchemaManager } from "@webiny/api-headless-cms-sql/features/modelSchemaManager/abstractions.js";
++import { ModelSchemaManagerFeature } from "@webiny/api-headless-cms-sql/features/modelSchemaManager/feature.js";
++import { TableNameResolverConfig } from "@webiny/api-headless-cms-sql/features/tableNameResolver/abstractions.js";
++import { TableNameResolverFeature } from "@webiny/api-headless-cms-sql/features/tableNameResolver/feature.js";
++import { SyncTableManager } from "../src/features/syncTableManager/abstractions.js";
++import { SyncTableManagerFeature } from "../src/features/syncTableManager/feature.js";
++
++describe("SQL table manager registration", () => {
++    const globals = globalThis as Record<string, unknown>;
++    const originalManagers = globals.__sqlTableManagers;
++    const knex = knexLib({ client: "pg" });
++
++    afterEach(() => {
++        if (originalManagers === undefined) {
++            delete globals.__sqlTableManagers;
++        } else {
++            globals.__sqlTableManagers = originalManagers;
++        }
++    });
++
++    const createManagers = () => {
++        const container = new Container();
++        container.registerInstance(KnexClient, { client: knex });
++        container.registerInstance(TableNameResolverConfig, { sharedTables: false });
++        TableNameResolverFeature.register(container);
++        EntryTableManagerFeature.register(container);
++        GroupSchemaManagerFeature.register(container);
++        ModelSchemaManagerFeature.register(container);
++        SyncTableManagerFeature.register(container);
++
++        return [
++            new TableManager(knex),
++            container.resolve(EntryTableManager),
++            container.resolve(GroupSchemaManager),
++            container.resolve(ModelSchemaManager),
++            container.resolve(SyncTableManager)
++        ];
++    };
++
++    it("does not create a global registry as request containers are created", () => {
++        delete globals.__sqlTableManagers;
++
++        for (let i = 0; i < 10; i++) {
++            createManagers();
++        }
++
++        expect(globals.__sqlTableManagers).toBeUndefined();
++    });
++
++    it("registers managers when the test reset registry is enabled", () => {
++        const managers: Array<{ reset(): void }> = [];
++        globals.__sqlTableManagers = managers;
++
++        const created = createManagers();
++
++        expect(managers).toEqual(created);
++    });
++});
+diff --git a/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts b/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
+index e29918e8..e4a2dff6 100644
+--- a/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
++++ b/packages/api-headless-cms-pg-os/src/features/syncTableManager/SyncTableManager.ts
+@@ -1,4 +1,5 @@
+ import { KnexClient } from "@webiny/api-core-sql";
++import { registerSqlTableManager } from "@webiny/api-core-sql/TableManager.js";
+ import { SyncTableManager as SyncTableManagerAbstraction } from "./abstractions.js";
+ import { TableNameResolver } from "@webiny/api-headless-cms-sql/features/tableNameResolver/abstractions.js";
+ 
+@@ -12,9 +13,7 @@ class SyncTableManagerImpl implements SyncTableManagerAbstraction.Interface {
+         this.knex = knex;
+         this.tableName = tableNameResolver.resolve("os_sync");
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as SyncTableManagerAbstraction.Interface[];
+-        managers.push(this);
++        registerSqlTableManager(this);
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/__tests__/__api__/setupFile.js b/packages/api-headless-cms-sql/__tests__/__api__/setupFile.js
+index 4d2a27e2..dbadfe59 100644
+--- a/packages/api-headless-cms-sql/__tests__/__api__/setupFile.js
++++ b/packages/api-headless-cms-sql/__tests__/__api__/setupFile.js
+@@ -4,6 +4,8 @@ import { FieldSortingRegistry } from "@webiny/api-headless-cms-storage";
+ import { registerSQLCore } from "@webiny/api-core-sql";
+ import { createRegisterExtensionPlugin } from "@webiny/handler";
+ 
++globalThis.__sqlTableManagers ??= [];
++
+ const sqlClient = process.env.WEBINY_SQL_CLIENT;
+ 
+ const clientImports = {
+diff --git a/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts b/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
+index de4aeac0..58894604 100644
+--- a/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
++++ b/packages/api-headless-cms-sql/src/features/entryTableManager/EntryTableManager.ts
+@@ -1,4 +1,5 @@
+ import { KnexClient } from "@webiny/api-core-sql";
++import { registerSqlTableManager } from "@webiny/api-core-sql/TableManager.js";
+ import { EntryTableManager as EntryTableManagerAbstraction } from "./abstractions.js";
+ import { TableNameResolver } from "~/features/tableNameResolver/abstractions.js";
+ 
+@@ -12,9 +13,7 @@ class EntryTableManagerImpl implements EntryTableManagerAbstraction.Interface {
+         this.knex = knex;
+         this.tableName = tableNameResolver.resolve("entries");
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as EntryTableManagerAbstraction.Interface[];
+-        managers.push(this);
++        registerSqlTableManager(this);
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts b/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
+index c8c6ccf0..2a210d7c 100644
+--- a/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
++++ b/packages/api-headless-cms-sql/src/features/groupSchemaManager/GroupSchemaManager.ts
+@@ -1,4 +1,5 @@
+ import { KnexClient } from "@webiny/api-core-sql";
++import { registerSqlTableManager } from "@webiny/api-core-sql/TableManager.js";
+ import { GroupSchemaManager as GroupSchemaManagerAbstraction } from "./abstractions.js";
+ 
+ class GroupSchemaManagerImpl implements GroupSchemaManagerAbstraction.Interface {
+@@ -8,9 +9,7 @@ class GroupSchemaManagerImpl implements GroupSchemaManagerAbstraction.Interface
+     constructor(knex: KnexClient.Interface) {
+         this.knex = knex;
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as GroupSchemaManagerAbstraction.Interface[];
+-        managers.push(this);
++        registerSqlTableManager(this);
+     }
+ 
+     public reset(): void {
+diff --git a/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts b/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
+index cbb5b4e9..1b6ae456 100644
+--- a/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
++++ b/packages/api-headless-cms-sql/src/features/modelSchemaManager/ModelSchemaManager.ts
+@@ -1,4 +1,5 @@
+ import { KnexClient } from "@webiny/api-core-sql";
++import { registerSqlTableManager } from "@webiny/api-core-sql/TableManager.js";
+ import { ModelSchemaManager as ModelSchemaManagerAbstraction } from "./abstractions.js";
+ 
+ class ModelSchemaManagerImpl implements ModelSchemaManagerAbstraction.Interface {
+@@ -8,9 +9,7 @@ class ModelSchemaManagerImpl implements ModelSchemaManagerAbstraction.Interface
+     constructor(knex: KnexClient.Interface) {
+         this.knex = knex;
+ 
+-        const g = globalThis as Record<string, unknown>;
+-        const managers = (g.__sqlTableManagers ??= []) as ModelSchemaManagerAbstraction.Interface[];
+-        managers.push(this);
++        registerSqlTableManager(this);
+     }
+ 
+     public reset(): void {

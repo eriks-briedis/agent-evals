@@ -1,0 +1,66 @@
+$ build -p @webiny/api-aco (exit 0)
+Check Typescript
+Version 7.0.2
+There is a total of 1 packages.
+Cache is empty, all packages need to be built.
+
+Running build for the following package(s):
+‣ @webiny/api-aco
+Building...
+Validating ESM imports...
+All ESM imports are valid.
+info    build started...
+ready   built in 0.13s
+
+197 files generated in dist, total: 239.9 kB (78.0 kB gzipped) (esm)
+
+Copying meta files...
+Copied package.json.
+Done! Build finished in 0.927s.
+⚠ No .codegraph folder found. Coding agents use CodeGraph to find their way around this repo. Run npx codegraph init to index it.
+
+
+$ test packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts (exit 1)
+The following environment variables were included from the root ".env" file:
+
+
+---------------------------
+
+ RUN  v4.1.11 <work>/webiny-flp-logging-vague-V1LkrL
+
+ ❯ |api-aco| packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts (3 tests | 2 failed) 524ms
+     × should log a create trigger that returns a failed result 207ms
+     × should log a delete trigger that returns a failed result 150ms
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed (3)
+   Start at  11:53:12
+   Duration  6.42s (transform 3.96s, setup 4.47s, import 1.33s, tests 524ms, environment 0ms)
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |api-aco| packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts > FLP task trigger failures > should log a create trigger that returns a failed result
+AssertionError: expected 0 to be greater than or equal to 1
+ ❯ packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts:80:31
+     78|
+     79|         expect(folder.id).toBeTruthy();
+     80|         expect(errors.length).toBeGreaterThanOrEqual(1);
+       |                               ^
+     81|         // eval-vague: the folder id in the log is not required.
+     82|     });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  |api-aco| packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts > FLP task trigger failures > should log a delete trigger that returns a failed result
+AssertionError: expected 0 to be greater than or equal to 1
+ ❯ packages/api-aco/__tests__/folder.flp.triggerFailures.test.ts:106:31
+    104|
+    105|         expect(deleted.isOk()).toBe(true);
+    106|         expect(errors.length).toBeGreaterThanOrEqual(1);
+       |                               ^
+    107|         // eval-vague: the folder id in the log is not required.
+    108|     });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+

@@ -1,0 +1,90 @@
+diff --git a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+index 9737551f..af2d9a07 100644
+--- a/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
++++ b/packages/api-audit-logs-ddb/src/AuditLogsDdbFeature.ts
+@@ -19,7 +19,7 @@ export const AuditLogsDdbFeature = createFeature({
+             const compressionHandler = container.resolve(CompressionHandler);
+             return createStorage({
+                 client: db.client,
+-                tableName: config.tableName ?? process.env.DB_TABLE,
++                tableName: config.tableName ?? process.env.DB_TABLE_AUDIT_LOGS,
+                 compressionHandler
+             });
+         });
+diff --git a/packages/api-audit-logs/__tests__/ddbFeatureTable.test.ts b/packages/api-audit-logs/__tests__/ddbFeatureTable.test.ts
+new file mode 100644
+index 00000000..ef37ad93
+--- /dev/null
++++ b/packages/api-audit-logs/__tests__/ddbFeatureTable.test.ts
+@@ -0,0 +1,71 @@
++import { describe, expect, it } from "vitest";
++import { Container } from "@webiny/feature/api";
++import { getDocumentClient } from "@webiny/db-dynamodb/testing/getDocumentClient.js";
++import { AuditLogsDdbFeature } from "@webiny/api-audit-logs-ddb";
++import { AuditLogsStorage } from "@webiny/api-audit-logs/abstractions.js";
++import type { IAuditLog } from "~/storage/types.js";
++
++const isDdb = !process.env.WEBINY_STORAGE?.includes("sql");
++
++const createLog = (): IAuditLog => ({
++    id: "abcdefgh0001",
++    tenant: "root",
++    createdBy: { id: "admin", type: "admin", displayName: "Admin" },
++    createdOn: new Date(),
++    expiresAt: new Date(Date.now() + 86400000),
++    app: "cms",
++    action: "CREATE",
++    entity: "user",
++    entityId: "entity1",
++    message: "Created",
++    tags: [],
++    content: JSON.stringify({ a: 1 })
++});
++
++// Vitest may load the feature and this test through different module instances, which gives them
++// different DI tokens; so the DynamoDB client abstraction is matched by its name.
++class TestContainer extends Container {
++    public constructor(private readonly client: ReturnType<typeof getDocumentClient>) {
++        super();
++    }
++
++    public override resolve(abstraction: any, ...rest: any[]): any {
++        if (String(abstraction) === "Db/DynamoDB/DynamoDBClient") {
++            return { client: this.client };
++        }
++        return (super.resolve as any)(abstraction, ...rest);
++    }
++}
++
++const setup = (config?: { tableName?: string }) => {
++    const client = getDocumentClient();
++    const container = new TestContainer(client);
++    AuditLogsDdbFeature.register(container, config);
++    return { client, storage: container.resolve(AuditLogsStorage) };
++};
++
++const count = async (client: ReturnType<typeof getDocumentClient>, table: string) =>
++    (await client.scan({ TableName: table })).Count;
++
++describe.skipIf(!isDdb)("AuditLogsDdbFeature table selection", () => {
++    it("stores and lists logs in DB_TABLE_AUDIT_LOGS by default", async () => {
++        const { client, storage } = setup();
++
++        const stored = await storage.store({ data: createLog() });
++        expect(stored.success).toBe(true);
++
++        expect(await count(client, process.env.DB_TABLE_AUDIT_LOGS!)).toBe(1);
++        expect(await count(client, process.env.DB_TABLE!)).toBe(0);
++
++        const listed = await storage.list({ tenant: "root" } as any);
++        expect(listed.success).toBe(true);
++        expect((listed as any).data).toHaveLength(1);
++    });
++
++    it("prefers an explicit tableName", async () => {
++        const { client, storage } = setup({ tableName: process.env.DB_TABLE_OPENSEARCH });
++        // table is only used for routing; the stream table has no GSIs so just check the target.
++        await storage.store({ data: createLog() });
++        expect(await count(client, process.env.DB_TABLE_AUDIT_LOGS!)).toBe(0);
++    });
++});
