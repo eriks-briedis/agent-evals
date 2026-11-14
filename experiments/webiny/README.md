@@ -80,7 +80,7 @@ Pass count, then median tool calls.
 
 ![Tool calls per task](per-task.png)
 
-The images are generated from `sessions.csv` by [`make-images.mjs`](make-images.mjs).
+The images are generated from `sessions.csv` and `sessions-vague.csv` by [`make-images.mjs`](make-images.mjs).
 
 ## Vague tickets
 
@@ -103,6 +103,8 @@ Medians per session, 18 sessions per row. "Tests" is sessions where the hidden t
 | M | Claude Code | Opus 5.5 | 18/18 | 14/18 | 14/18 | 18/18 | 29 | 502.5 | $0.76 |
 
 In row I, Auto picked `gpt-6.1-terra` in all 18 sessions. One row M session hit the 30-minute timeout with a passing fix already written.
+
+![Vague tickets, all six tasks](vague-tickets.png)
 
 Hidden tests passed per task:
 
@@ -144,6 +146,8 @@ Tests passed, then sessions that passed overall, then median cost per session.
 | K | Copilot CLI | `gpt-6.1-terra`, pinned | vague | 5/5, 5/5, 14.7 credits | 5/5, 5/5, 13.4 credits |
 
 Median tool calls on `flp-logging` and `audit-logs`: row G 10.5 and 21, row L 14 and 23, row N 24 and 19, row M 43 and 28, row H 11 and 19, row J 14 and 34, row I 93 and 107, row K 75 and 88.
+
+![Vague tickets, Copilot CLI and Claude Code on the two failing tasks](vague-harness.png)
 
 ### What it shows
 

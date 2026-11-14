@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Renders the result tables in this folder as PNG images from sessions.csv.
+// Renders the result tables in this folder as PNG images from sessions.csv and sessions-vague.csv.
 // Needs Chrome or Chromium: node make-images.mjs [path-to-chrome]
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,6 +30,23 @@ const stat = (row) => {
 };
 const S = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((k) => [k, stat(k)]));
 const x = (a, b) => `${(a / b).toFixed(1)}×`;
+
+// Vague-ticket follow-up (rows G to N).
+const [vHead, ...vLines] = fs.readFileSync(path.join(HERE, 'sessions-vague.csv'), 'utf8').trim().split('\n');
+const vCols = vHead.split(',');
+const vague = vLines.map((l) => Object.fromEntries(l.split(',').slice(0, vCols.length - 1).map((v, i) => [vCols[i], v])));
+const frac = (r, key) => `${r.filter((s) => s[key] === 'true').length}/${r.length}`;
+// First three attempts of all six tasks.
+const V = Object.fromEntries(['G', 'H', 'I', 'M'].map((k) => {
+  const r = vague.filter((s) => s.row === k && Number(s.attempt) <= 3);
+  return [k, {
+    tests: frac(r, 'tests_pass'), scope: frac(r, 'in_scope'), pass: frac(r, 'pass'),
+    tools: median(r.map((s) => s.tool_calls)), seconds: Math.round(median(r.map((s) => s.seconds))),
+    cost: r[0].copilot_credits !== '' ? `${median(r.map((s) => s.copilot_credits)).toFixed(1)} credits` : `$${median(r.map((s) => s.claude_cost_usd)).toFixed(2)}`,
+  }];
+}));
+// Hidden tests passed on one task, all attempts of a row.
+const vt = (row, task) => frac(vague.filter((s) => s.row === row && s.task.startsWith(`webiny-${task}-vague`)), 'tests_pass');
 
 const page = (title, sub, table, notes) => `<!doctype html><meta charset="utf-8"><style>
 *{box-sizing:border-box;margin:0}
@@ -80,6 +97,25 @@ const images = {
     `<table><tr><th>Task</th><th>Claude Code<br>Sonnet</th><th>Copilot<br>Sonnet</th><th>Copilot<br>Auto</th><th>Claude Code<br>Opus</th><th>Copilot Auto<br>+ wiki</th><th>Copilot Sonnet<br>+ wiki</th></tr>
     ${['audit-logs', 'os-registries', 'flp-logging', 'model-cache', 'sql-leak', 'tenant-leak'].map((t) => `<tr><td>${t}</td>${['A', 'B', 'C', 'D', 'E', 'F'].map((k) => `<td${k === 'C' || k === 'E' ? ' class="hi"' : ''}>${median(of(k).filter((s) => s.task === `webiny-${t}`).map((s) => s.tool_calls))}</td>`).join('')}</tr>`).join('')}</table>`,
     'Tasks are merged bug-fix PRs in webiny/webiny-js. Three attempts per task.'),
+  'vague-tickets': page(
+    'Vague tickets: Sonnet fails in both harnesses.',
+    'The same six Webiny bugs, with tickets that give only the symptom. 3 attempts each.',
+    `<table><tr><th>Setup</th><th>Passed,<br>precise ticket</th><th>Tests,<br>vague ticket</th><th>Within<br>size limits</th><th>Tool calls</th><th>Seconds</th><th>Cost per session</th></tr>
+    <tr><td>Claude Code<small>Sonnet 5.5</small></td><td>${S.A.pass}</td><td class="hi">${V.G.tests}</td><td>${V.G.scope}</td><td>${V.G.tools}</td><td>${V.G.seconds}</td><td>${V.G.cost}</td></tr>
+    <tr><td>Copilot CLI<small>Sonnet 5.5, pinned</small></td><td>${S.B.pass}</td><td class="hi">${V.H.tests}</td><td>${V.H.scope}</td><td>${V.H.tools}</td><td>${V.H.seconds}</td><td>${V.H.cost}</td></tr>
+    <tr><td>Copilot CLI<small>Auto: Terra ×18</small></td><td>${S.C.pass}</td><td>${V.I.tests}</td><td>${V.I.scope}</td><td>${V.I.tools}</td><td>${V.I.seconds}</td><td>${V.I.cost}</td></tr>
+    <tr><td>Claude Code<small>Opus 5.5</small></td><td>${S.D.pass}</td><td>${V.M.tests}</td><td>${V.M.scope}</td><td>${V.M.tools}</td><td>${V.M.seconds}</td><td>${V.M.cost}</td></tr></table>`,
+    'Medians per session, 18 sessions per row. Tests = the hidden tests from the real fix pass.<br>Sonnet’s failures are fixes that stop at the first plausible cause.'),
+  'vague-harness': page(
+    'Vague tickets: both harnesses fail the same way.',
+    'The two bugs Sonnet 5.5 gets wrong. Sessions where the hidden tests pass, out of attempts.',
+    `<table><tr><th>Bug and ticket</th><th>Claude Code<br>Sonnet 5.5</th><th>Copilot CLI<br>Sonnet 5.5</th><th>Claude Code<br>Opus 5.5</th><th>Copilot CLI<br>Auto (Terra)</th></tr>
+    <tr><td>flp-logging<small>vague ticket</small></td><td class="hi">${vt('G', 'flp-logging')}</td><td class="hi">${vt('H', 'flp-logging')}</td><td>${vt('M', 'flp-logging')}</td><td>${vt('I', 'flp-logging')}</td></tr>
+    <tr><td>audit-logs<small>vague ticket</small></td><td>${vt('G', 'audit-logs')}</td><td>${vt('H', 'audit-logs')}</td><td>${vt('M', 'audit-logs')}</td><td>${vt('I', 'audit-logs')}</td></tr>
+    <tr><td>flp-logging<small>+ one-sentence hint to look for other causes</small></td><td>${vt('L', 'flp-logging')}</td><td>${vt('J', 'flp-logging')}</td><td>–</td><td>–</td></tr>
+    <tr><td>audit-logs<small>+ one-sentence hint to look for other causes</small></td><td>${vt('L', 'audit-logs')}</td><td>${vt('J', 'audit-logs')}</td><td>–</td><td>–</td></tr>
+</table>`,
+    'flp-logging: two kinds of failure must be logged; Sonnet usually handles one.<br>audit-logs: Sonnet often changes a plausible line in the wrong package.'),
 };
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-evals-img-'));
